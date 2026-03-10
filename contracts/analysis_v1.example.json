@@ -1,0 +1,11 @@
+{
+    "schema_version": "v1",
+    "request_id": "1700000000000",
+    "filename": "photo.jpg",
+    "content_type": "image/jpeg",
+    "size_bytes": 123456,
+    "analysis": {
+      "status": "stub",
+      "notes": "Upload pipeline working"
+    }
+  }
