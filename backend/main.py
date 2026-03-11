@@ -19,7 +19,8 @@ app.add_middleware(
 # Initialize Gemini (it automatically looks for the GEMINI_API_KEY env var)
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-model = genai.GenerativeModel('gemini-1.5-pro')
+# Updated to use the latest available Flash model from your list
+model = genai.GenerativeModel('models/gemini-3-flash-preview')
 
 @app.get("/")
 async def root():
@@ -52,17 +53,20 @@ async def analyze(image: UploadFile = File(...)):
     
     # 2. The Prompt (Strictly defining the contract)
     prompt = """
-    Analyze this person's outfit. Return ONLY a valid JSON object matching this exact schema:
-    {
-      "detected_outfit": {
-        "status": "confident" | "needs_user_input",
-        "items": [
-          {"label": "string", "color": "string", "type": "top" | "bottom" | "outerwear" | "shoes"}
-        ],
-        "style_tags": ["string", "string"]
-      }
-    }
-    """
+Analyze this person's outfit for a fashion app. 
+Identify the individual items of clothing.
+Return ONLY a valid JSON object with this structure:
+{
+  "detected_outfit": {
+    "status": "success",
+    "items": [
+      {"label": "t-shirt", "color": "white", "type": "top"},
+      {"label": "jeans", "color": "blue", "type": "bottom"}
+    ],
+    "style_tags": ["casual", "minimalist"]
+  }
+}
+"""
     
     try:
         # 3. Call Gemini and force JSON output to prevent formatting hallucinations
