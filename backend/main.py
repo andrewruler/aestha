@@ -19,8 +19,7 @@ app.add_middleware(
 # Initialize Gemini (it automatically looks for the GEMINI_API_KEY env var)
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# Adding 'models/' prefix and using the stable identifier
-model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-1.5-pro')
 
 @app.get("/")
 async def root():
