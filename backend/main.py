@@ -1,12 +1,13 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+import google.generativeai as genai
 import time
 import os
+import json
 
 app = FastAPI(title="Aestha AI Backend")
 
-# Enable CORS so your Expo app can talk to this server
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,26 +16,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize Gemini (it automatically looks for the GEMINI_API_KEY env var)
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
+# Use Flash for speed, essential for mobile app responsiveness
+model = genai.GenerativeModel('gemini-1.5-flash')
+
 @app.get("/")
 async def root():
-    # Automatically sends browser users to the API documentation
     return RedirectResponse(url='/docs')
-
-@app.get("/health")
-def health():
-    return {"status": "online", "schema_version": "v1"}
 
 @app.post("/analyze")
 async def analyze(image: UploadFile = File(...)):
     content = await image.read()
     
-    # This matches the 'contract' Member A is building against
-    return {
-        "schema_version": "v1",
-        "request_id": str(int(time.time())),
-        "status": "success",
-        "analysis": {
-            "size_bytes": len(content),
-            "notes": "Backend reached. Image received."
+    # 1. Prepare the image for Gemini
+    image_parts = [
+        {
+            "mime_type": image.content_type,
+            "data": content
         }
+    ]
+    
+    # 2. The Prompt (Strictly defining the contract)
+    prompt = """
+    Analyze this person's outfit. Return ONLY a valid JSON object matching this exact schema:
+    {
+      "detected_outfit": {
+        "status": "confident" | "needs_user_input",
+        "items": [
+          {"label": "string", "color": "string", "type": "top" | "bottom" | "outerwear" | "shoes"}
+        ],
+        "style_tags": ["string", "string"]
+      }
     }
+    """
+    
+    try:
+        # 3. Call Gemini and force JSON output to prevent formatting hallucinations
+        response = model.generate_content(
+            [prompt, image_parts[0]],
+            generation_config={"response_mime_type": "application/json"}
+        )
+        
+        # Parse the string response back into a Python dictionary
+        ai_data = json.loads(response.text)
+        
+        # 4. Return the final contract to the mobile app
+        return {
+            "schema_version": "v1",
+            "request_id": str(int(time.time())),
+            "status": "success",
+            "analysis": ai_data
+        }
+        
+    except Exception as e:
+        return {
+            "schema_version": "v1",
+            "status": "error",
+            "message": str(e)
+        }
