@@ -1,11 +1,12 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-import os
+from fastapi.responses import RedirectResponse
 import time
+import os
 
-app = FastAPI()
+app = FastAPI(title="Aestha AI Backend")
 
-# Dev-friendly CORS. Later restrict to your app domains.
+# Enable CORS so your Expo app can talk to this server
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,23 +15,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    # Automatically sends browser users to the API documentation
+    return RedirectResponse(url='/docs')
+
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"status": "online", "schema_version": "v1"}
 
 @app.post("/analyze")
 async def analyze(image: UploadFile = File(...)):
     content = await image.read()
-    size_bytes = len(content)
-
+    
+    # This matches the 'contract' Member A is building against
     return {
         "schema_version": "v1",
-        "request_id": str(int(time.time() * 1000)),
-        "filename": image.filename,
-        "content_type": image.content_type,
-        "size_bytes": size_bytes,
+        "request_id": str(int(time.time())),
+        "status": "success",
         "analysis": {
-            "status": "stub",
-            "notes": "Upload pipeline working"
+            "size_bytes": len(content),
+            "notes": "Backend reached. Image received."
         }
     }
