@@ -19,8 +19,8 @@ app.add_middleware(
 # Initialize Gemini (it automatically looks for the GEMINI_API_KEY env var)
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# Use Flash for speed, essential for mobile app responsiveness
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Adding 'models/' prefix and using the stable identifier
+model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
 
 @app.get("/")
 async def root():
