@@ -24,7 +24,20 @@ model = genai.GenerativeModel('gemini-1.5-pro')
 @app.get("/")
 async def root():
     return RedirectResponse(url='/docs')
-
+@app.get("/list-models")
+async def list_available_models():
+    try:
+        models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                models.append({
+                    "name": m.name,
+                    "display_name": m.display_name,
+                    "description": m.description
+                })
+        return {"available_models": models}
+    except Exception as e:
+        return {"error": str(e)}
 @app.post("/analyze")
 async def analyze(image: UploadFile = File(...)):
     content = await image.read()
