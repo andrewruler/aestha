@@ -26,12 +26,32 @@ export default function HomeScreen() {
   const [lastRatio, setLastRatio] = useState<string | null>(null);
   const [gender, setGender] = useState<"male" | "female" | null>(null);
   const [selectedOutfit, setSelectedOutfit] = useState<string | null>(null);
+  const [tryOnError, setTryOnError] = useState<string | null>(null);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
 
   const { width } = useWindowDimensions();
   const isWideLayout = width >= 900;
 
+  const addLog = (message: string) => {
+    const timestamp = new Date().toISOString().split("T")[1]?.split(".")[0] || "";
+    const line = `[${timestamp}] ${message}`;
+    console.log(line);
+    setDebugLogs((prev) => [...prev.slice(-59), line]);
+  };
+
+  const showError = (title: string, message: string) => {
+    addLog(`[error] ${title}: ${message}`);
+    Alert.alert(title, message);
+    if (Platform.OS === "web" && typeof window !== "undefined" && window.alert) {
+      window.alert(`${title}: ${message}`);
+    }
+  };
+
   // Initial Analysis Upload: receives the captured photo URI and spatial ratio from SpatialCamera
   const handleCaptureAndUpload = async (uri: string | null, ratio: string | null) => {
+    addLog(
+      `[analyze] capture received | uri=${uri ? "yes" : "no"} | ratio=${ratio ?? "null"} | platform=${Platform.OS}`
+    );
     setCapturedImageUri(uri);
     if (ratio) setLastRatio(ratio);
     setIsCameraActive(false);
@@ -47,6 +67,7 @@ export default function HomeScreen() {
 
     setLoading(true);
     setResult(null);
+    setTryOnError(null);
 
     const formData = new FormData();
 
@@ -55,6 +76,7 @@ export default function HomeScreen() {
       try {
         const response = await fetch(uri);
         const blob = await response.blob();
+        addLog(`[analyze] web blob prepared | type=${blob.type || "unknown"} size=${blob.size}`);
         const webFile =
           typeof File !== "undefined"
             ? new File([blob], "spatial_capture.jpg", {
@@ -82,6 +104,7 @@ export default function HomeScreen() {
     }
 
     try {
+      addLog("[analyze] request start -> /analyze");
       const response = await fetch(`${BACKEND_URL}/analyze`, {
         method: "POST",
         body: formData,
@@ -89,10 +112,12 @@ export default function HomeScreen() {
           Accept: "application/json",
         },
       });
-      const json = await response.json();
+      const raw = await response.text();
+      addLog(`[analyze] response status=${response.status} body=${raw.slice(0, 260)}`);
+      const json = raw ? JSON.parse(raw) : {};
       setResult(json);
     } catch (e) {
-      Alert.alert("Analysis Error", String(e));
+      showError("Analysis Error", String(e));
     } finally {
       setLoading(false);
     }
@@ -106,13 +131,17 @@ export default function HomeScreen() {
     if (!capturedImageUri) return;
 
     setTryOnLoading(true);
+    setTryOnError(null);
     try {
-      console.log(`Triggering FASHN for item: ${itemLabel}`);
+      addLog(
+        `[try-on] start | item=${itemLabel} | hasImage=${capturedImageUri ? "yes" : "no"} | platform=${Platform.OS}`
+      );
       const formData = new FormData();
       if (Platform.OS === "web") {
         try {
           const response = await fetch(capturedImageUri);
           const blob = await response.blob();
+          addLog(`[try-on] web blob prepared | type=${blob.type || "unknown"} size=${blob.size}`);
           const webFile =
             typeof File !== "undefined"
               ? new File([blob], "tryon.jpg", {
@@ -121,7 +150,7 @@ export default function HomeScreen() {
               : blob;
           formData.append("user_image", webFile as any);
         } catch (e) {
-          Alert.alert("Try-On Error", "Could not read captured image in browser.");
+          showError("Try-On Error", "Could not read captured image in browser.");
           return;
         }
       } else {
@@ -133,6 +162,7 @@ export default function HomeScreen() {
       }
       formData.append("clothing_item", String(itemLabel));
 
+      addLog("[try-on] request start -> /try-on");
       const response = await fetch(`${BACKEND_URL}/try-on`, {
         method: "POST",
         body: formData,
@@ -140,17 +170,29 @@ export default function HomeScreen() {
           Accept: "application/json",
         },
       });
-      
-      const json = await response.json();
+      const raw = await response.text();
+      addLog(`[try-on] response status=${response.status} body=${raw.slice(0, 300)}`);
+
+      let json: any = {};
+      try {
+        json = raw ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error(`Non-JSON /try-on response: ${raw.slice(0, 180)}`);
+      }
+
       if (!response.ok || json?.status !== "completed" || !json?.result_image_url) {
         const message = json?.message || json?.details?.message || `Try-on failed (HTTP ${response.status})`;
+        setTryOnError(message);
         throw new Error(message);
       }
 
       setTryOnImage(json.result_image_url);
+      addLog(`[try-on] completed | result=${json.result_image_url}`);
       Alert.alert("Try-On Ready", `Here’s your look for ${itemLabel}.`);
     } catch (e) {
-      Alert.alert("Try-On Failed", String(e));
+      const errMsg = String(e);
+      setTryOnError(errMsg);
+      showError("Try-On Failed", errMsg);
     } finally {
       setTryOnLoading(false);
     }
@@ -341,6 +383,12 @@ export default function HomeScreen() {
               />
             </View>
 
+            {!!tryOnError && (
+              <Text style={styles.tryOnErrorText}>
+                Try-on error: {tryOnError}
+              </Text>
+            )}
+
             {tryOnImage && (
               <View style={styles.tryOnPreview}>
                 <Text style={styles.tryOnTitle}>Your New Look</Text>
@@ -350,6 +398,24 @@ export default function HomeScreen() {
                 />
               </View>
             )}
+
+            <View style={styles.debugPanel}>
+              <View style={styles.debugHeaderRow}>
+                <Text style={styles.debugTitle}>Debug Logs</Text>
+                <TouchableOpacity onPress={() => setDebugLogs([])}>
+                  <Text style={styles.debugClear}>Clear</Text>
+                </TouchableOpacity>
+              </View>
+              {!debugLogs.length ? (
+                <Text style={styles.debugEmpty}>No logs yet.</Text>
+              ) : (
+                debugLogs.slice(-12).map((line, idx) => (
+                  <Text key={`${idx}-${line}`} style={styles.debugLine}>
+                    {line}
+                  </Text>
+                ))
+              )}
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -597,5 +663,42 @@ const styles = StyleSheet.create({
   tryOnImage: {
     width: "100%",
     height: 320,
+  },
+  tryOnErrorText: {
+    marginTop: 10,
+    color: "#ff8aa0",
+    fontSize: 12,
+  },
+  debugPanel: {
+    marginTop: 20,
+    backgroundColor: "rgba(255,255,255,0.03)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    borderRadius: 12,
+    padding: 10,
+  },
+  debugHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  debugTitle: {
+    color: "#d5d5ff",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  debugClear: {
+    color: "#9c9cff",
+    fontSize: 12,
+  },
+  debugEmpty: {
+    color: "#8080a0",
+    fontSize: 11,
+  },
+  debugLine: {
+    color: "#9ca3c7",
+    fontSize: 10,
+    marginBottom: 4,
   },
 });

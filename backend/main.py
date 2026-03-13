@@ -69,12 +69,17 @@ def upload_to_supabase(path: str, data: bytes) -> str:
 
     upload_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{path}"
     headers = {
+        "apikey": SUPABASE_API_KEY,
         "Authorization": f"Bearer {SUPABASE_API_KEY}",
         "Content-Type": "application/octet-stream",
         "x-upsert": "true",
     }
-    resp = requests.post(upload_url, headers=headers, data=data, timeout=30)
-    resp.raise_for_status()
+    # Use PUT with raw bytes for direct object upload.
+    resp = requests.put(upload_url, headers=headers, data=data, timeout=30)
+    if not resp.ok:
+        raise RuntimeError(
+            f"Supabase upload failed (HTTP {resp.status_code}): {resp.text}"
+        )
     # For a public bucket, the public URL follows this pattern:
     return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{path}"
 
