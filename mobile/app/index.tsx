@@ -68,17 +68,24 @@ export default function HomeScreen() {
     setTryOnLoading(true);
     try {
       console.log(`Triggering FASHN for item: ${itemLabel}`);
+      const formData = new FormData();
+      formData.append("user_image", {
+        uri: capturedImageUri,
+        name: "tryon.jpg",
+        type: "image/jpeg",
+      } as any);
+      formData.append("clothing_item", itemLabel);
+
       const response = await fetch(`${BACKEND_URL}/try-on`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_image: capturedImageUri,
-          clothing_item: itemLabel,
-        }),
+        body: formData,
+        headers: {
+          Accept: "application/json",
+        },
       });
       
       const json = await response.json();
-      // Backend echoes a completed try-on with result_image_url
+      // Backend returns a completed try-on with result_image_url
       setTryOnImage(json.result_image_url || capturedImageUri);
       Alert.alert("Try-On Ready", `Here’s your look for ${itemLabel}.`);
     } catch (e) {

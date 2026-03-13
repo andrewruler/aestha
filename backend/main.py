@@ -6,7 +6,6 @@ import time
 import os
 import json
 import requests  # Used for FASHN integration and listing models
-from pydantic import BaseModel
 
 app = FastAPI(title="Aestha AI Backend")
 
@@ -23,28 +22,150 @@ app.add_middleware(
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # Using your specified preview model
-model = genai.GenerativeModel('models/gemini-3-flash-preview')
+model = genai.GenerativeModel("models/gemini-3-flash-preview")
+
+# Supabase storage configuration
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://ljrkmsffunpuouqvfvsj.supabase.co")
+SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "uploads")
+SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
+
+# Simple mapping from Gemini clothing labels to garment image URLs
+GARMENT_IMAGE_MAP = {
+    "white t-shirt": "https://i.ibb.co/pLp1pMh/white-tshirt.png",
+    "blue jeans": "https://i.ibb.co/M9vGv1s/blue-jeans.png",
+    "black hoodie": "https://i.ibb.co/6y4T0h9/black-hoodie.png",
+    "floral dress": "https://i.ibb.co/RQYh5Z5/floral-dress.png",
+    "beige chinos": "https://i.ibb.co/vX3wVfQ/beige-chinos.png",
+}
+
+
+def upload_to_supabase(path: str, data: bytes) -> str:
+    """
+    Upload raw bytes to a Supabase Storage bucket and return the public URL.
+    """
+    if not SUPABASE_API_KEY:
+        raise RuntimeError("SUPABASE_API_KEY is not configured")
+
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{path}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_API_KEY}",
+        "Content-Type": "application/octet-stream",
+        "x-upsert": "true",
+    }
+    resp = requests.post(upload_url, headers=headers, data=data, timeout=30)
+    resp.raise_for_status()
+    # For a public bucket, the public URL follows this pattern:
+    return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{path}"
 
 @app.get("/")
 async def root():
-    return RedirectResponse(url='/docs')
-
-class TryOnRequest(BaseModel):
-    user_image: str
-    clothing_item: str
+    return RedirectResponse(url="/docs")
 
 
 @app.post("/try-on")
-async def generate_try_on(payload: TryOnRequest):
+async def generate_try_on(
+    user_image: UploadFile = File(...),
+    clothing_item: str = Form(...),
+):
     """
-    Simple, fully synchronous stub for try-on.
-    Echoes back the provided user_image as result_image_url so the mobile app
-    can display a 'new look' immediately without external dependencies.
+    Real try-on flow:
+    - Uploads the user image to Supabase.
+    - Looks up a garment image URL from the label.
+    - Calls FASHN's run + status endpoints and returns the final result image URL.
     """
+    # 1. Read and upload the user image
+    user_bytes = await user_image.read()
+    filename = user_image.filename or f"user-{int(time.time())}.jpg"
+    storage_path = f"user-uploads/{int(time.time())}-{filename}"
+
+    try:
+        user_image_url = upload_to_supabase(storage_path, user_bytes)
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to upload user image: {e}"}
+
+    # 2. Map clothing label to garment URL
+    garment_url = GARMENT_IMAGE_MAP.get(clothing_item.lower())
+    if not garment_url:
+        return {
+            "status": "error",
+            "message": f"No garment image mapped for clothing item '{clothing_item}'",
+        }
+
+    fashn_api_key = os.environ.get("FASHN_API_KEY")
+    if not fashn_api_key:
+        return {"status": "error", "message": "FASHN_API_KEY is not configured"}
+
+    headers = {
+        "Authorization": f"Bearer {fashn_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    run_payload = {
+        "model_image": user_image_url,
+        "garment_image": garment_url,
+        "category": "tops",  # Could be refined based on clothing_item/type
+        "nsfw_filter": True,
+    }
+
+    # 3. Start the FASHN job
+    try:
+        run_resp = requests.post(
+            "https://api.fashn.ai/v1/run",
+            json=run_payload,
+            headers=headers,
+            timeout=30,
+        )
+        run_data = run_resp.json()
+    except Exception as e:
+        return {"status": "error", "message": f"FASHN run failed: {e}"}
+
+    job_id = run_data.get("id")
+    if not job_id:
+        return {
+            "status": "error",
+            "message": "FASHN did not return a job id",
+            "details": run_data,
+        }
+
+    # 4. Poll status until completion or timeout
+    status_url = f"https://api.fashn.ai/v1/status/{job_id}"
+    max_attempts = 20  # ~60 seconds if we sleep 3s between polls
+    for _ in range(max_attempts):
+        try:
+            status_resp = requests.get(status_url, headers=headers, timeout=30)
+            status_data = status_resp.json()
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"FASHN status check failed: {e}",
+                "job_id": job_id,
+            }
+
+        status = status_data.get("status")
+        if status == "completed":
+            result_url = (
+                status_data.get("image_url")
+                or status_data.get("result_image_url")
+                or user_image_url
+            )
+            return {
+                "status": "completed",
+                "job_id": job_id,
+                "result_image_url": result_url,
+            }
+        if status in ("failed", "error"):
+            return {
+                "status": "error",
+                "job_id": job_id,
+                "details": status_data,
+            }
+
+        time.sleep(3)
+
     return {
-        "status": "completed",
-        "result_image_url": payload.user_image,
-        "clothing_item": payload.clothing_item,
+        "status": "timeout",
+        "job_id": job_id,
+        "message": "FASHN job did not complete in time",
     }
 
 @app.get("/list-models")
