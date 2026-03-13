@@ -116,9 +116,60 @@ def resolve_garment(label: str):
 
     return None
 
+
+def get_fashn_api_key():
+    """
+    Read and sanitize FASHN API key from env.
+    Render env values can accidentally include quotes or whitespace.
+    """
+    raw = os.environ.get("FASHN_API_KEY")
+    if not raw:
+        return None
+    cleaned = raw.strip().strip('"').strip("'").strip()
+    return cleaned or None
+
 @app.get("/")
 async def root():
     return RedirectResponse(url="/docs")
+
+
+@app.get("/health/fashn-auth")
+async def health_fashn_auth():
+    """
+    Lightweight auth diagnostic for FASHN key validity.
+    It intentionally uses a fake status id:
+    - 401 => key is invalid
+    - 404/400 => key is likely valid (auth passed, id invalid)
+    """
+    fashn_api_key = get_fashn_api_key()
+    if not fashn_api_key:
+        return {
+            "ok": False,
+            "message": "FASHN_API_KEY missing after sanitization",
+        }
+
+    headers = {
+        "Authorization": f"Bearer {fashn_api_key}",
+        "X-API-KEY": fashn_api_key,
+    }
+    test_url = "https://api.fashn.ai/v1/status/healthcheck-invalid-job-id"
+
+    try:
+        resp = requests.get(test_url, headers=headers, timeout=15)
+        return {
+            "ok": resp.status_code != 401,
+            "status_code": resp.status_code,
+            "key_prefix": fashn_api_key[:6] + "***",
+            "key_length": len(fashn_api_key),
+            "response_snippet": (resp.text or "")[:220],
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": f"Failed to reach FASHN: {e}",
+            "key_prefix": fashn_api_key[:6] + "***",
+            "key_length": len(fashn_api_key),
+        }
 
 
 @app.post("/try-on")
@@ -150,12 +201,13 @@ async def generate_try_on(
             "message": f"No garment image mapped for clothing item '{clothing_item}'",
         }
 
-    fashn_api_key = os.environ.get("FASHN_API_KEY")
+    fashn_api_key = get_fashn_api_key()
     if not fashn_api_key:
         return {"status": "error", "message": "FASHN_API_KEY is not configured"}
 
     headers = {
         "Authorization": f"Bearer {fashn_api_key}",
+        "X-API-KEY": fashn_api_key,
         "Content-Type": "application/json",
     }
 
@@ -177,7 +229,19 @@ async def generate_try_on(
         run_resp.raise_for_status()
         run_data = run_resp.json()
     except Exception as e:
-        return {"status": "error", "message": f"FASHN run failed: {e}"}
+        error_body = ""
+        if "run_resp" in locals():
+            error_body = (run_resp.text or "")[:300]
+        return {
+            "status": "error",
+            "message": f"FASHN run failed: {e}",
+            "details": {
+                "fashn_http_status": getattr(run_resp, "status_code", None) if "run_resp" in locals() else None,
+                "fashn_response_snippet": error_body,
+                "key_prefix": fashn_api_key[:6] + "***",
+                "key_length": len(fashn_api_key),
+            },
+        }
 
     job_id = run_data.get("id")
     if not job_id:
