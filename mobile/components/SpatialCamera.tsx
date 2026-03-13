@@ -51,7 +51,7 @@ export default function SpatialCamera({ onCapture }: SpatialCameraProps) {
                 return;
               }
               const photo = await cameraRef.current.takePhoto?.();
-              const uri = photo?.path ?? null;
+              const uri = photo?.path ? `file://${photo.path}` : null;
               onCapture(uri, bodyRatio);
             } catch (e) {
               console.warn('Capture failed', e);
