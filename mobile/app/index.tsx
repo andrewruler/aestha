@@ -1,42 +1,44 @@
 import React, { useState } from "react";
-import { Button, Text, View, ScrollView, Image, Alert, ActivityIndicator, Platform } from "react-native";
-import * as ImagePicker from "expo-image-picker";
+import { Button, Text, View, ScrollView, ActivityIndicator, Alert, Image } from "react-native";
+import SpatialCamera from "../components/SpatialCamera";
 import { BACKEND_URL } from "../src/config";
+import Avatar3D from "../components/Avatar3D";
 
 export default function HomeScreen() {
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [result, setResult] = useState<any>(null);
+  const [isCameraActive, setIsCameraActive] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [tryOnLoading, setTryOnLoading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
+  const [tryOnImage, setTryOnImage] = useState<string | null>(null);
+  const [lastRatio, setLastRatio] = useState<string | null>(null);
 
-  const pickImage = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.7,
-    });
-    if (!res.canceled) {
-      const asset = res.assets[0];
-      setPhotoUri(asset.uri);
-      setPhotoFile("file" in asset && asset.file ? asset.file : null);
-      setResult(null);
+  // Initial Analysis Upload: receives the captured photo URI and spatial ratio from SpatialCamera
+  const handleCaptureAndUpload = async (uri: string | null, ratio: string | null) => {
+    setCapturedImageUri(uri);
+    if (ratio) setLastRatio(ratio);
+    setIsCameraActive(false);
+
+    // Require a valid image; ratio can fall back to "unknown"
+    if (!uri) {
+      Alert.alert(
+        "Capture failed",
+        "We couldn't capture a photo from the camera. Please try again."
+      );
+      return;
     }
-  };
 
-  const upload = async () => {
-    if (!photoUri) return Alert.alert("Hold up", "Pick a photo first!");
-    
     setLoading(true);
     setResult(null);
 
     const formData = new FormData();
-    if (Platform.OS === "web" && photoFile) {
-      formData.append("image", photoFile);
-    } else {
-      formData.append("image", {
-        uri: photoUri,
-        name: "upload.jpg",
-        type: "image/jpeg",
-      } as any);
+    formData.append("image", {
+      uri,
+      name: "spatial_capture.jpg",
+      type: "image/jpeg",
+    } as any);
+    if (ratio) {
+      formData.append("body_ratio", ratio);
     }
 
     try {
@@ -45,60 +47,141 @@ export default function HomeScreen() {
         body: formData,
         headers: {
           Accept: "application/json",
-          // Do NOT set Content-Type: fetch sets multipart/form-data with boundary automatically
         },
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        setResult({ error: `HTTP ${response.status}`, details: errorText });
-        return;
-      }
-
       const json = await response.json();
       setResult(json);
     } catch (e) {
-      setResult({ error: "Network request failed", details: String(e) });
+      Alert.alert("Analysis Error", String(e));
     } finally {
       setLoading(false);
     }
   };
+  const startPolling = (jobId: string) => {
+    // Polling is no longer needed with the synchronous stub backend.
+    // This function is kept for future FASHN integration.
+  };
+  // Trigger Member B's Try-On Endpoint
+  const handleTryOn = async (itemLabel: string) => {
+    if (!capturedImageUri) return;
+
+    setTryOnLoading(true);
+    try {
+      console.log(`Triggering FASHN for item: ${itemLabel}`);
+      const response = await fetch(`${BACKEND_URL}/try-on`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_image: capturedImageUri,
+          clothing_item: itemLabel,
+        }),
+      });
+      
+      const json = await response.json();
+      // Backend echoes a completed try-on with result_image_url
+      setTryOnImage(json.result_image_url || capturedImageUri);
+      Alert.alert("Try-On Ready", `Here’s your look for ${itemLabel}.`);
+    } catch (e) {
+      Alert.alert("Try-On Failed", String(e));
+    } finally {
+      setTryOnLoading(false);
+    }
+  };
+
+  if (isCameraActive) {
+    return <SpatialCamera onCapture={handleCaptureAndUpload} />;
+  }
 
   return (
     <ScrollView style={{ flex: 1, padding: 20, paddingTop: 60 }}>
-      <Text style={{ fontSize: 24, fontWeight: "bold", marginBottom: 10 }}>Aestha Phase 1</Text>
+      <Text style={{ fontSize: 28, fontWeight: "bold", marginBottom: 10 }}>Aestha</Text>
       
-      <Button title="1. Pick Image" onPress={pickImage} color="#6200ee" />
-      <View style={{ height: 10 }} />
-      <Button title="2. Analyze" onPress={upload} disabled={loading || !photoUri} color="#03dac6" />
-
-      {loading && <ActivityIndicator size="large" style={{ marginTop: 20 }} />}
-
-      {photoUri && (
-        <Image source={{ uri: photoUri }} style={{ width: '100%', height: 300, borderRadius: 10, marginTop: 20 }} />
-      )}
-
-      {result?.analysis?.detected_outfit && (
-  <View style={{ marginTop: 20, padding: 15, backgroundColor: "#fff", borderRadius: 15, elevation: 3 }}>
-    <Text style={{ fontSize: 18, fontWeight: "bold", marginBottom: 10 }}>Detected Outfit</Text>
-    
-    {/* Map through the items Gemini found */}
-    {result.analysis.detected_outfit.items.map((item: any, index: number) => (
-      <View key={index} style={{ flexDirection: "row", justifyContent: "space-between", paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: "#eee" }}>
-        <Text style={{ fontWeight: "600", textTransform: "capitalize" }}>{item.label}</Text>
-        <Text style={{ color: "#666" }}>{item.color} ({item.type})</Text>
-      </View>
-    ))}
-
-    <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 15 }}>
-      {result.analysis.detected_outfit.style_tags.map((tag: string, index: number) => (
-        <View key={index} style={{ backgroundColor: "#6200ee", borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4, marginRight: 8, marginBottom: 8 }}>
-          <Text style={{ color: "#fff", fontSize: 12 }}>#{tag}</Text>
+      <Button title="Open Spatial Camera" onPress={() => setIsCameraActive(true)} color="#6200ee" />
+      
+      {loading && (
+        <View style={{ marginTop: 20 }}>
+          <ActivityIndicator size="large" color="#6200ee" />
+          <Text style={{ textAlign: 'center', marginTop: 10 }}>Analyzing fit & proportions...</Text>
         </View>
-      ))}
-    </View>
+      )}
+      
+      {/* 1. Spatial Analysis Card */}
+      {result?.analysis?.spatial_analysis && (
+        <View style={{ marginTop: 20, padding: 20, backgroundColor: "#e3f2fd", borderRadius: 15 }}>
+          <Text style={{ fontSize: 18, fontWeight: "bold", color: "#1565c0", marginBottom: 5 }}>
+            📐 Spatial Fit Analysis
+          </Text>
+          <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>
+            Detected Shape: {result.analysis.spatial_analysis.body_shape}
+          </Text>
+          <Text style={{ fontSize: 14, color: "#555", marginTop: 10, fontStyle: "italic" }}>
+            "{result.analysis.spatial_analysis.fit_advice}"
+          </Text>
+        </View>
+      )}
+      {/* The 3D Capstone Demonstration */}
+      {result?.analysis?.spatial_analysis && (
+  <View style={{ marginTop: 20, marginBottom: 40 }}>
+    <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 10 }}>
+      🌐 Your 3D Spatial Profile
+    </Text>
+    
+        <Avatar3D rawRatio={lastRatio} />
+    
+    <Text style={{ textAlign: "center", color: "#666", marginTop: 8, fontStyle: "italic" }}>
+      Real-time mesh generation based on MediaPipe coordinates.
+    </Text>
   </View>
 )}
+      {/* Try-On Results Section */}
+  {tryOnImage && (
+    <View style={{ marginTop: 20, borderRadius: 15, overflow: 'hidden' }}>
+      <Text style={{ fontSize: 18, fontWeight: "bold", marginBottom: 10 }}>Your New Look:</Text>
+      <Image 
+        source={{ uri: tryOnImage }} 
+        style={{ width: '100%', height: 400, resizeMode: 'cover' }} 
+      />
+    </View>
+  )}
+      {/* 2. Detected Outfit Mapping & Try-On */}
+      {result?.analysis?.detected_outfit?.items && (
+        <View style={{ marginTop: 25 }}>
+          <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 15 }}>Recommended Styling</Text>
+          
+          {result.analysis.detected_outfit.items.map((item: any, index: number) => (
+            <View 
+              key={index} 
+              style={{ 
+                flexDirection: 'row', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                padding: 15,
+                backgroundColor: '#f5f5f5',
+                borderRadius: 10,
+                marginBottom: 10
+              }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontWeight: 'bold', fontSize: 16 }}>{item.label}</Text>
+                <Text style={{ color: '#666', fontSize: 12 }}>{item.confidence}% match</Text>
+              </View>
+
+              <Button 
+                title={tryOnLoading ? "..." : "Try Similar"} 
+                onPress={() => handleTryOn(item.label)}
+                disabled={tryOnLoading}
+              />
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Debug view - hidden if clean */}
+      {!loading && !result && (
+        <Text style={{ marginTop: 40, color: '#aaa', textAlign: 'center' }}>
+          No analysis yet. Capture a photo to begin.
+        </Text>
+      )}
     </ScrollView>
   );
 }
