@@ -5,6 +5,7 @@ import google.generativeai as genai
 import time
 import os
 import json
+import asyncio
 import requests  # Used for FASHN integration and listing models
 
 app = FastAPI(title="Aestha AI Backend")
@@ -30,12 +31,32 @@ SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "uploads")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 
 # Simple mapping from Gemini clothing labels to garment image URLs
-GARMENT_IMAGE_MAP = {
-    "white t-shirt": "https://i.ibb.co/pLp1pMh/white-tshirt.png",
-    "blue jeans": "https://i.ibb.co/M9vGv1s/blue-jeans.png",
-    "black hoodie": "https://i.ibb.co/6y4T0h9/black-hoodie.png",
-    "floral dress": "https://i.ibb.co/RQYh5Z5/floral-dress.png",
-    "beige chinos": "https://i.ibb.co/vX3wVfQ/beige-chinos.png",
+GARMENT_CATALOG = {
+    "white t-shirt": {
+        "url": "https://i.ibb.co/pLp1pMh/white-tshirt.png",
+        "category": "tops",
+        "aliases": ["white tee", "tshirt", "t-shirt", "tee shirt"],
+    },
+    "blue jeans": {
+        "url": "https://i.ibb.co/M9vGv1s/blue-jeans.png",
+        "category": "bottoms",
+        "aliases": ["jeans", "denim jeans", "blue denim"],
+    },
+    "black hoodie": {
+        "url": "https://i.ibb.co/6y4T0h9/black-hoodie.png",
+        "category": "tops",
+        "aliases": ["hoodie", "black sweatshirt"],
+    },
+    "floral dress": {
+        "url": "https://i.ibb.co/RQYh5Z5/floral-dress.png",
+        "category": "one-pieces",
+        "aliases": ["dress", "floral one piece"],
+    },
+    "beige chinos": {
+        "url": "https://i.ibb.co/vX3wVfQ/beige-chinos.png",
+        "category": "bottoms",
+        "aliases": ["chinos", "beige pants"],
+    },
 }
 
 
@@ -56,6 +77,39 @@ def upload_to_supabase(path: str, data: bytes) -> str:
     resp.raise_for_status()
     # For a public bucket, the public URL follows this pattern:
     return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{path}"
+
+
+def normalize_label(label: str) -> str:
+    cleaned = (label or "").lower().replace("_", " ").replace("-", " ")
+    return " ".join(cleaned.split())
+
+
+def resolve_garment(label: str):
+    normalized = normalize_label(label)
+
+    # Exact match on canonical keys
+    if normalized in GARMENT_CATALOG:
+        return GARMENT_CATALOG[normalized]
+
+    # Match aliases
+    for _, meta in GARMENT_CATALOG.items():
+        for alias in meta["aliases"]:
+            if normalized == normalize_label(alias):
+                return meta
+
+    # Keyword fallback for model label variance
+    if "jean" in normalized or "denim" in normalized:
+        return GARMENT_CATALOG["blue jeans"]
+    if "chino" in normalized or "pant" in normalized:
+        return GARMENT_CATALOG["beige chinos"]
+    if "hoodie" in normalized or "sweatshirt" in normalized:
+        return GARMENT_CATALOG["black hoodie"]
+    if "dress" in normalized:
+        return GARMENT_CATALOG["floral dress"]
+    if "tee" in normalized or "tshirt" in normalized or "t shirt" in normalized:
+        return GARMENT_CATALOG["white t-shirt"]
+
+    return None
 
 @app.get("/")
 async def root():
@@ -84,8 +138,8 @@ async def generate_try_on(
         return {"status": "error", "message": f"Failed to upload user image: {e}"}
 
     # 2. Map clothing label to garment URL
-    garment_url = GARMENT_IMAGE_MAP.get(clothing_item.lower())
-    if not garment_url:
+    garment = resolve_garment(clothing_item)
+    if not garment:
         return {
             "status": "error",
             "message": f"No garment image mapped for clothing item '{clothing_item}'",
@@ -102,8 +156,8 @@ async def generate_try_on(
 
     run_payload = {
         "model_image": user_image_url,
-        "garment_image": garment_url,
-        "category": "tops",  # Could be refined based on clothing_item/type
+        "garment_image": garment["url"],
+        "category": garment["category"],
         "nsfw_filter": True,
     }
 
@@ -115,6 +169,7 @@ async def generate_try_on(
             headers=headers,
             timeout=30,
         )
+        run_resp.raise_for_status()
         run_data = run_resp.json()
     except Exception as e:
         return {"status": "error", "message": f"FASHN run failed: {e}"}
@@ -133,6 +188,7 @@ async def generate_try_on(
     for _ in range(max_attempts):
         try:
             status_resp = requests.get(status_url, headers=headers, timeout=30)
+            status_resp.raise_for_status()
             status_data = status_resp.json()
         except Exception as e:
             return {
@@ -146,6 +202,7 @@ async def generate_try_on(
             result_url = (
                 status_data.get("image_url")
                 or status_data.get("result_image_url")
+                or status_data.get("output_image")
                 or user_image_url
             )
             return {
@@ -160,7 +217,7 @@ async def generate_try_on(
                 "details": status_data,
             }
 
-        time.sleep(3)
+        await asyncio.sleep(3)
 
     return {
         "status": "timeout",

@@ -85,8 +85,12 @@ export default function HomeScreen() {
       });
       
       const json = await response.json();
-      // Backend returns a completed try-on with result_image_url
-      setTryOnImage(json.result_image_url || capturedImageUri);
+      if (!response.ok || json?.status !== "completed" || !json?.result_image_url) {
+        const message = json?.message || json?.details?.message || `Try-on failed (HTTP ${response.status})`;
+        throw new Error(message);
+      }
+
+      setTryOnImage(json.result_image_url);
       Alert.alert("Try-On Ready", `Here’s your look for ${itemLabel}.`);
     } catch (e) {
       Alert.alert("Try-On Failed", String(e));
