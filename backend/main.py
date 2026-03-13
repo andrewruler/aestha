@@ -6,9 +6,14 @@ import time
 import os
 import json
 import asyncio
-import requests  # Used for FASHN integration and listing models
+import requests
+from typing import Optional
+# --- NEW IMPORT ---
+from serpapi import GoogleSearch
 
 app = FastAPI(title="Aestha AI Backend")
+# --- NEW API KEY ---
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY")
 
 # Keep your CORS setup so Expo can connect!
 app.add_middleware(
@@ -31,30 +36,50 @@ SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "uploads")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 DEFAULT_GARMENT_IMAGE_URL = "https://v3.fal.media/files/elephant/qXMQpeM6fVOlg7bZs0dEh_fashn-tshirt-2.png"
 
-# Simple mapping from Gemini clothing labels to garment image URLs
+# Upgraded Retail Catalog with UI Metadata
 GARMENT_CATALOG = {
     "white t-shirt": {
-        "url": DEFAULT_GARMENT_IMAGE_URL,
+        "id": "white_tshirt",
+        "brand": "ESSENTIALS",
+        "name": "Heavyweight Cotton Tee",
+        "price": "$45",
+        "url": "https://i.ibb.co/pLp1pMh/white-tshirt.png",
         "category": "tops",
         "aliases": ["white tee", "tshirt", "t-shirt", "tee shirt"],
     },
     "blue jeans": {
-        "url": DEFAULT_GARMENT_IMAGE_URL,
+        "id": "blue_jeans",
+        "brand": "ACNE STUDIOS",
+        "name": "1989 Loose Fit Denim",
+        "price": "$380",
+        "url": "https://i.ibb.co/M9vGv1s/blue-jeans.png",
         "category": "bottoms",
         "aliases": ["jeans", "denim jeans", "blue denim"],
     },
     "black hoodie": {
-        "url": DEFAULT_GARMENT_IMAGE_URL,
+        "id": "black_hoodie",
+        "brand": "AESTHA CORE",
+        "name": "Oversized Tech Hoodie",
+        "price": "$120",
+        "url": "https://i.ibb.co/6y4T0h9/black-hoodie.png",
         "category": "tops",
         "aliases": ["hoodie", "black sweatshirt"],
     },
     "floral dress": {
-        "url": DEFAULT_GARMENT_IMAGE_URL,
+        "id": "floral_dress",
+        "brand": "ZIMMERMANN",
+        "name": "Botanical Silk Midi",
+        "price": "$650",
+        "url": "https://i.ibb.co/RQYh5Z5/floral-dress.png",
         "category": "one-pieces",
         "aliases": ["dress", "floral one piece"],
     },
     "beige chinos": {
-        "url": DEFAULT_GARMENT_IMAGE_URL,
+        "id": "beige_chinos",
+        "brand": "LEMAIRE",
+        "name": "Pleated Wide Trousers",
+        "price": "$495",
+        "url": "https://i.ibb.co/vX3wVfQ/beige-chinos.png",
         "category": "bottoms",
         "aliases": ["chinos", "beige pants"],
     },
@@ -189,6 +214,25 @@ async def health_fashn_auth():
         }
 
 
+@app.get("/catalog")
+async def get_catalog():
+    """
+    Returns the live retail inventory for the frontend carousel.
+    """
+    items = []
+    for key, val in GARMENT_CATALOG.items():
+        image_url = validate_or_fallback_garment_url(val["url"])
+        items.append({
+            "id": val["id"],
+            "brand": val["brand"],
+            "name": val["name"],
+            "price": val["price"],
+            "image": image_url,
+            "label": key,
+        })
+    return {"status": "success", "catalog": items}
+
+
 @app.post("/try-on")
 async def generate_try_on(
     user_image: UploadFile = File(...),
@@ -240,8 +284,11 @@ async def generate_try_on(
             "model_image": user_image_url,
             "garment_image": garment_url,
             "category": garment["category"],
-            "mode": "balanced",
+            "mode": "quality",
             "moderation_level": "permissive",
+            "garment_photo_type": "flat-lay",
+            "output_format": "png",
+            "num_samples": 1,
         },
     }
 
@@ -341,74 +388,102 @@ async def list_available_models():
 
 @app.post("/analyze")
 async def analyze(
-    image: UploadFile = File(...),
+    front_image: Optional[UploadFile] = File(None),
+    face_image: Optional[UploadFile] = File(None),
+    image: Optional[UploadFile] = File(None),  # Backward-compatible fallback
+    gender: str = Form("unknown"),
     height_cm: str = Form("unknown"),
     shoulder_cm: str = Form("unknown"),
+    chest_cm: str = Form("unknown"),
+    waist_cm: str = Form("unknown"),
     hip_cm: str = Form("unknown"),
-    gender: str = Form("unknown"),
+    fit_preference: str = Form("unknown"),
+    aesthetic: str = Form("unknown"),
+    preferred_fit: str = Form("unknown"),
+    preferred_palette: str = Form("unknown"),
+    preferred_aesthetic: str = Form("unknown"),
 ):
-    content = await image.read()
-
-    # 1. Prepare the image for Gemini
-    image_parts = [
-        {
-            "mime_type": image.content_type,
-            "data": content,
+    resolved_front = front_image or image
+    if not resolved_front:
+        return {
+            "schema_version": "v3",
+            "status": "error",
+            "message": "Missing required image upload (front_image or image).",
         }
-    ]
 
-    # 2. Upgraded prompt with exact anthropometric measurements
+    resolved_fit = fit_preference if fit_preference != "unknown" else preferred_fit
+    resolved_aesthetic = aesthetic if aesthetic != "unknown" else preferred_aesthetic
+
+    parts = []
+    front_bytes = await resolved_front.read()
+    parts.append({
+        "mime_type": resolved_front.content_type or "image/jpeg",
+        "data": front_bytes,
+    })
+
+    if face_image:
+        face_bytes = await face_image.read()
+        parts.append({
+            "mime_type": face_image.content_type or "image/jpeg",
+            "data": face_bytes,
+        })
+
     prompt = f"""
-    You are an elite fashion stylist specializing in K-style and minimalist aesthetics.
-    Analyze the uploaded photo and the exact anthropometric measurements provided.
+    You are an elite Creative Director and Fashion Stylist specializing in K-style, Asian streetwear, and high-fashion minimalism.
+    Analyze the provided photos (a front-body silhouette and optionally a face/shoulder shot).
 
     CRITICAL CLIENT DATA:
     - Gender Profile: {gender}
-    - Height: {height_cm} cm
-    - Shoulder Width: {shoulder_cm} cm
-    - Hip Width: {hip_cm} cm
+    - Exact Measurements: Height {height_cm}cm | Shoulders {shoulder_cm}cm | Chest {chest_cm}cm | Waist {waist_cm}cm | Hips {hip_cm}cm
+    - User Preferences: Fit ({resolved_fit}), Aesthetic ({resolved_aesthetic}), Palette ({preferred_palette})
 
-    Use these measurements to infer their geometric silhouette (e.g., Pear, Inverted Triangle,
-    Hourglass, Rectangle) and provide concrete fit guidance.
-    Recommend specific cuts that balance these exact proportions.
+    YOUR TASK:
+    1. Color Theory: If a face image is provided, infer their Seasonal Color Palette (e.g., Soft Autumn, Clear Winter). If no face image, set color_season to "Unknown".
+    2. Body Geometry: Use literal centimeter measurements to classify Kibbe body type or geometric silhouette.
+    3. Synthesis: Generate a cohesive 2-piece outfit recommendation (1 top, 1 bottom) honoring preferences.
 
     Return ONLY a valid JSON object with this exact structure:
     {{
+      "spatial_analysis": {{
+        "body_shape": "e.g., Flamboyant Natural, Pear, Inverted Triangle",
+        "color_season": "e.g., Deep Autumn (or 'Unknown' if no face photo)",
+        "geometry_advice": "2 sentences explaining how to dress for exact {shoulder_cm}cm shoulders and {hip_cm}cm hips."
+      }},
+      "style_synthesis": {{
+        "overall_vibe": "A 3-word summary of the look",
+        "outfit": [
+          {{"category": "tops", "description": "specific top recommendation", "search_term": "top search term"}},
+          {{"category": "bottoms", "description": "specific bottom recommendation", "search_term": "bottom search term"}}
+        ],
+        "stylist_rationale": "2 sentences explaining why this outfit flatters color season and geometry."
+      }},
       "detected_outfit": {{
         "status": "success",
         "items": [
-          {{"label": "t-shirt", "color": "white", "type": "top"}}
+          {{"label": "white t-shirt", "color": "white", "type": "top"}},
+          {{"label": "blue jeans", "color": "blue", "type": "bottom"}}
         ],
-        "style_tags": ["casual", "k-style"]
-      }},
-      "spatial_analysis": {{
-        "body_shape": "String classification (e.g., Pear, Inverted Triangle, True Hourglass)",
-        "fit_advice": "2-3 sentences of highly specific tailoring advice referencing their {shoulder_cm}cm shoulders and {hip_cm}cm hips."
+        "style_tags": ["k-style", "minimalist"]
       }}
     }}
     """
+    parts.insert(0, prompt)
 
     try:
-        # 3. Call Gemini and force JSON output to prevent formatting hallucinations
         response = model.generate_content(
-            [prompt, image_parts[0]],
+            parts,
             generation_config={"response_mime_type": "application/json"}
         )
-        
-        # Parse the string response back into a Python dictionary
         ai_data = json.loads(response.text)
-        
-        # 4. Return the final contract to the mobile app
         return {
-            "schema_version": "v2",
+            "schema_version": "v3",
             "request_id": str(int(time.time())),
             "status": "success",
             "analysis": ai_data
         }
-        
     except Exception as e:
         return {
-            "schema_version": "v2",
+            "schema_version": "v3",
             "status": "error",
             "message": str(e)
         }

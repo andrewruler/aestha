@@ -4,7 +4,13 @@ import "@tensorflow/tfjs-backend-webgl";
 import * as poseDetection from "@tensorflow-models/pose-detection";
 
 export type StepId = "front" | "side" | "face" | "measurements";
-export type ValidationResult = { valid: boolean; error?: string; meta?: Record<string, number> };
+export type ValidationResult = {
+  valid: boolean;
+  error?: string;
+  hint?: string;
+  meta?: Record<string, number>;
+  overlay?: Array<{ x: number; y: number; score: number; name?: string }>;
+};
 
 let detectorPromise: Promise<poseDetection.PoseDetector | null> | null = null;
 
@@ -37,12 +43,20 @@ const validateKeypointsForStep = (keypoints: any[], stepId: StepId): ValidationR
   const leftAnkle = getScore(keypoints, "left_ankle", 15);
   const rightAnkle = getScore(keypoints, "right_ankle", 16);
 
-  if (stepId === "front" || stepId === "side") {
+  if (stepId === "front") {
     if (nose < MIN_CONFIDENCE) {
-      return { valid: false, error: "Head is cut off. Please frame your entire body." };
+      return {
+        valid: false,
+        error: "Head is cut off. Please frame your entire body.",
+        hint: "Tilt camera slightly up or step back.",
+      };
     }
     if (leftAnkle < MIN_CONFIDENCE || rightAnkle < MIN_CONFIDENCE) {
-      return { valid: false, error: "Both feet must be visible to calculate height accurately." };
+      return {
+        valid: false,
+        error: "Both feet must be visible to calculate height accurately.",
+        hint: "Step backward until both ankles are visible.",
+      };
     }
     if (
       leftShoulder < MIN_CONFIDENCE ||
@@ -53,16 +67,57 @@ const validateKeypointsForStep = (keypoints: any[], stepId: StepId): ValidationR
       return {
         valid: false,
         error: "Torso is partially hidden. Stand clear of obstacles and keep shoulders/hips visible.",
+        hint: "Center your torso and avoid occluding objects.",
       };
     }
     if (leftWrist < MIN_CONFIDENCE || rightWrist < MIN_CONFIDENCE) {
-      return { valid: false, error: "Keep both arms visible and relaxed at your sides." };
+      return {
+        valid: false,
+        error: "Keep both arms visible and relaxed at your sides.",
+        hint: "Drop both arms naturally and keep elbows/wrists in frame.",
+      };
+    }
+  }
+
+  if (stepId === "side") {
+    if (nose < MIN_CONFIDENCE) {
+      return {
+        valid: false,
+        error: "Head is cut off. Keep your side profile fully framed.",
+        hint: "Turn sideways and step back slightly.",
+      };
+    }
+
+    const leftSideVisible =
+      leftShoulder >= MIN_CONFIDENCE && leftHip >= MIN_CONFIDENCE && leftAnkle >= MIN_CONFIDENCE;
+    const rightSideVisible =
+      rightShoulder >= MIN_CONFIDENCE && rightHip >= MIN_CONFIDENCE && rightAnkle >= MIN_CONFIDENCE;
+
+    if (!leftSideVisible && !rightSideVisible) {
+      return {
+        valid: false,
+        error: "A full side silhouette is not visible yet.",
+        hint: "Rotate 90 degrees; we need one full body side (shoulder, hip, ankle).",
+      };
+    }
+
+    const activeWristScore = leftSideVisible ? leftWrist : rightWrist;
+    if (activeWristScore < MIN_CONFIDENCE) {
+      return {
+        valid: false,
+        error: "Keep your arm visible for side silhouette alignment.",
+        hint: "Relax the visible arm and avoid crossing it in front of your torso.",
+      };
     }
   }
 
   if (stepId === "face") {
     if (nose < MIN_CONFIDENCE || (leftEye < MIN_CONFIDENCE && rightEye < MIN_CONFIDENCE)) {
-      return { valid: false, error: "Face is not clear. Move closer and keep your face centered." };
+      return {
+        valid: false,
+        error: "Face is not clear. Move closer and keep your face centered.",
+        hint: "Bring your face to center and avoid backlighting.",
+      };
     }
   }
 
@@ -203,8 +258,16 @@ export const validateLiveVideoFrame = async (
       return { valid: false, error: "No person detected. Step fully into frame." };
     }
 
-    const poseResult = validateKeypointsForStep(poses[0].keypoints ?? [], stepId);
-    if (!poseResult.valid) return poseResult;
+    const keypoints = poses[0].keypoints ?? [];
+    const overlay = keypoints.map((kp: any) => ({
+      x: kp.x,
+      y: kp.y,
+      score: kp.score ?? 0,
+      name: kp.name,
+    }));
+
+    const poseResult = validateKeypointsForStep(keypoints, stepId);
+    if (!poseResult.valid) return { ...poseResult, overlay };
 
     const avgLuminance = computeAverageLuminance(videoEl, videoEl.videoWidth, videoEl.videoHeight);
     if (avgLuminance < DARK_THRESHOLD) {
@@ -216,10 +279,12 @@ export const validateLiveVideoFrame = async (
 
     return {
       valid: true,
+      hint: stepId === "face" ? "Hold still and keep your face centered." : "Perfect. Hold still...",
       meta: {
         ...(poseResult.meta ?? {}),
         avgLuminance,
       },
+      overlay,
     };
   } catch (err) {
     return { valid: false, error: `Live scan error: ${String(err)}` };

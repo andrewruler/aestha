@@ -9,33 +9,45 @@ import {
   TextInput,
   Image,
   Platform,
+  TouchableOpacity,
 } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { initializeValidationEngine, validateCapturedShot } from "../utils/visionValidation";
 import LiveScanner from "./LiveScanner";
 import { BodyMeasurements, calculateBodyMath } from "../utils/bodyMath";
+import * as ImagePicker from "expo-image-picker";
 
 const STEPS = [
   { id: "front", label: "Front Scan", desc: "Stand straight facing the camera, head to toe." },
-  { id: "side", label: "Side Scan", desc: "Turn 90 degrees and keep your full body in frame." },
-  { id: "face", label: "Face Scan", desc: "Move closer: face and shoulders centered with good light." },
+  { id: "side", label: "Side Scan (Optional)", desc: "Turn 90 degrees and keep one full side silhouette in frame." },
+  { id: "face", label: "Face Scan (Optional)", desc: "Move closer: face and shoulders centered with good light." },
   { id: "measurements", label: "Exact Measurements", desc: "Optional: enter measurements (cm) for precision." },
+  { id: "survey", label: "Style Survey (Optional)", desc: "Help us refine recommendations to your taste." },
 ] as const;
 
-type ShotId = (typeof STEPS)[number]["id"];
+type ScanStepId = "front" | "side" | "face";
 
 export type UserMeasurements = { height: string; chest: string; waist: string; hips: string };
+export type StyleSurvey = {
+  preferredFit: "baggy" | "regular" | "slim" | "";
+  preferredPalette: "neutrals" | "darks" | "pastels" | "";
+  preferredAesthetic: "streetwear" | "minimalist" | "techwear" | "";
+};
 export type CapturePayload = {
   front: string | null;
   side: string | null;
   face: string | null;
   measurements: UserMeasurements;
   calculatedMath: BodyMeasurements | null;
+  survey: StyleSurvey;
 };
 
-interface Props { onComplete: (payload: CapturePayload) => void; }
+interface Props {
+  onComplete: (payload: CapturePayload) => void;
+  mode?: "scan" | "upload";
+}
 
-export default function CaptureWizard({ onComplete }: Props) {
+export default function CaptureWizard({ onComplete, mode = "scan" }: Props) {
   const [stepIndex, setStepIndex] = useState(0);
   const [photos, setPhotos] = useState<{ front: string | null; side: string | null; face: string | null }>({
     front: null,
@@ -48,6 +60,12 @@ export default function CaptureWizard({ onComplete }: Props) {
     waist: "",
     hips: "",
   });
+  const [survey, setSurvey] = useState<StyleSurvey>({
+    preferredFit: "",
+    preferredPalette: "",
+    preferredAesthetic: "",
+  });
+  const [captureMode, setCaptureMode] = useState<"scan" | "upload">(mode);
   const [engineLoading, setEngineLoading] = useState(true);
   const [validating, setValidating] = useState(false);
   const [validationError, setValidationError] = useState("");
@@ -74,6 +92,7 @@ export default function CaptureWizard({ onComplete }: Props) {
 
   const currentStep = STEPS[stepIndex];
   const isMeasurementStep = currentStep.id === "measurements";
+  const isSurveyStep = currentStep.id === "survey";
 
   const applyValidationError = (message: string) => {
     setValidationError(message);
@@ -84,7 +103,7 @@ export default function CaptureWizard({ onComplete }: Props) {
   };
 
   const handleScan = async () => {
-    const currentStepId = currentStep.id as ShotId;
+    const currentStepId = currentStep.id as ScanStepId;
 
     if (!cameraRef.current) {
       setCaptureError("Camera not ready yet. Please wait a second.");
@@ -123,16 +142,48 @@ export default function CaptureWizard({ onComplete }: Props) {
   };
 
   const handleWebScanComplete = (uri: string) => {
-    const currentStepId = currentStep.id as ShotId;
+    const currentStepId = currentStep.id as ScanStepId;
     setValidationError("");
     setCaptureError("");
     setPhotos((prev) => ({ ...prev, [currentStepId]: uri }));
     setStepIndex((prev) => prev + 1);
   };
 
+  const handleUploadImage = async () => {
+    const currentStepId = currentStep.id as ScanStepId;
+    setValidationError("");
+    setCaptureError("");
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.9,
+      });
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+      const uri = result.assets[0].uri;
+      setValidating(true);
+      const validation = await validateCapturedShot(uri, currentStepId);
+      if (!validation.valid) {
+        applyValidationError(validation.error || "Invalid image.");
+        return;
+      }
+      setPhotos((prev) => ({ ...prev, [currentStepId]: uri }));
+      setStepIndex((prev) => prev + 1);
+    } catch (err) {
+      setCaptureError(`Upload failed: ${String(err)}`);
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const handleSkipCurrent = () => {
+    if (currentStep.id === "front") return;
+    setStepIndex((prev) => prev + 1);
+  };
+
   const handleFinish = async () => {
-    if (!photos.front || !photos.side || !photos.face) {
-      Alert.alert("Missing scans", "Please complete all 3 scans before submitting.");
+    if (!photos.front) {
+      Alert.alert("Front scan required", "Please capture at least the front scan.");
       return;
     }
 
@@ -156,7 +207,7 @@ export default function CaptureWizard({ onComplete }: Props) {
       if (photos.front) {
         computedBodyMath = await calculateBodyMath(photos.front, parsedHeight);
       }
-      onComplete({ ...photos, measurements, calculatedMath: computedBodyMath });
+      onComplete({ ...photos, measurements, calculatedMath: computedBodyMath, survey });
     } catch {
       Alert.alert("Math Error", "Failed to calculate proportions. Please try again.");
     } finally {
@@ -184,7 +235,7 @@ export default function CaptureWizard({ onComplete }: Props) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.stepCount}>Step {stepIndex + 1} of 4</Text>
+      <Text style={styles.stepCount}>Step {stepIndex + 1} of {STEPS.length}</Text>
       <Text style={styles.title}>{currentStep.label}</Text>
       <Text style={styles.desc}>{currentStep.desc}</Text>
 
@@ -227,6 +278,61 @@ export default function CaptureWizard({ onComplete }: Props) {
             value={measurements.hips}
             onChangeText={(t) => setMeasurements({ ...measurements, hips: t })}
           />
+          <View style={styles.optionalHintWrap}>
+            <Text style={styles.optionalHintText}>
+              Side and face scans are optional. Height is required for accurate body math.
+            </Text>
+          </View>
+          {isCalculating ? (
+            <View style={styles.calculatingWrap}>
+              <ActivityIndicator color="#A990FF" />
+              <Text style={styles.calculatingText}>Extracting measurements...</Text>
+            </View>
+          ) : (
+            <Button title="Continue to Style Survey" onPress={() => setStepIndex((prev) => prev + 1)} color="#A990FF" />
+          )}
+        </View>
+      ) : isSurveyStep ? (
+        <View style={styles.form}>
+          <Text style={styles.surveyLabel}>Preferred Fit</Text>
+          <View style={styles.choiceRow}>
+            {(["baggy", "regular", "slim"] as const).map((opt) => (
+              <TouchableOpacity
+                key={opt}
+                style={[styles.choiceChip, survey.preferredFit === opt && styles.choiceChipSelected]}
+                onPress={() => setSurvey((prev) => ({ ...prev, preferredFit: opt }))}
+              >
+                <Text style={styles.choiceChipText}>{opt}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.surveyLabel}>Favorite Palette</Text>
+          <View style={styles.choiceRow}>
+            {(["neutrals", "darks", "pastels"] as const).map((opt) => (
+              <TouchableOpacity
+                key={opt}
+                style={[styles.choiceChip, survey.preferredPalette === opt && styles.choiceChipSelected]}
+                onPress={() => setSurvey((prev) => ({ ...prev, preferredPalette: opt }))}
+              >
+                <Text style={styles.choiceChipText}>{opt}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.surveyLabel}>Go-to Aesthetic</Text>
+          <View style={styles.choiceRow}>
+            {(["streetwear", "minimalist", "techwear"] as const).map((opt) => (
+              <TouchableOpacity
+                key={opt}
+                style={[styles.choiceChip, survey.preferredAesthetic === opt && styles.choiceChipSelected]}
+                onPress={() => setSurvey((prev) => ({ ...prev, preferredAesthetic: opt }))}
+              >
+                <Text style={styles.choiceChipText}>{opt}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
           {isCalculating ? (
             <View style={styles.calculatingWrap}>
               <ActivityIndicator color="#A990FF" />
@@ -238,17 +344,17 @@ export default function CaptureWizard({ onComplete }: Props) {
         </View>
       ) : (
         <View style={styles.scanBlock}>
-          {Platform.OS === "web" ? (
+          {captureMode === "scan" && Platform.OS === "web" ? (
             <LiveScanner
               stepId={currentStep.id as "front" | "side" | "face"}
               onCaptureSuccess={handleWebScanComplete}
             />
-          ) : !permission || !permission.granted ? (
+          ) : captureMode === "scan" && (!permission || !permission.granted) ? (
             <View style={styles.permissionBox}>
               <Text style={styles.errorText}>Camera permission is required for live scanning.</Text>
               <Button title="Enable camera access" onPress={requestPermission} color="#8338ec" />
             </View>
-          ) : (
+          ) : captureMode === "scan" ? (
             <>
               <View style={styles.cameraViewport}>
                 <CameraView
@@ -259,7 +365,28 @@ export default function CaptureWizard({ onComplete }: Props) {
               </View>
               <Button title={`Scan ${currentStep.label}`} onPress={handleScan} color="#8338ec" />
             </>
+          ) : (
+            <Button title={`Upload ${currentStep.label}`} onPress={handleUploadImage} color="#8338ec" />
           )}
+          <View style={styles.modeRow}>
+            <TouchableOpacity
+              style={[styles.modeChip, captureMode === "scan" && styles.modeChipActive]}
+              onPress={() => setCaptureMode("scan")}
+            >
+              <Text style={styles.modeChipText}>Live Scan</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeChip, captureMode === "upload" && styles.modeChipActive]}
+              onPress={() => setCaptureMode("upload")}
+            >
+              <Text style={styles.modeChipText}>Upload Photos</Text>
+            </TouchableOpacity>
+            {currentStep.id !== "front" && (
+              <TouchableOpacity style={styles.skipChip} onPress={handleSkipCurrent}>
+                <Text style={styles.skipChipText}>Skip</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       )}
 
@@ -300,6 +427,44 @@ const styles = StyleSheet.create({
   validatingBox: { alignItems: "center", paddingVertical: 20 },
   validatingText: { color: "#fff", marginTop: 10 },
   scanBlock: { gap: 12 },
+  modeRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  modeChip: {
+    borderWidth: 1,
+    borderColor: "#2e2e44",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "#121223",
+  },
+  modeChipActive: {
+    borderColor: "#A990FF",
+    backgroundColor: "rgba(169,144,255,0.18)",
+  },
+  modeChipText: {
+    color: "#d6d6f0",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  skipChip: {
+    borderWidth: 1,
+    borderColor: "#5a3340",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "rgba(120,40,56,0.25)",
+    marginLeft: "auto",
+  },
+  skipChipText: {
+    color: "#ffb3c5",
+    fontSize: 11,
+    fontWeight: "700",
+  },
   cameraViewport: {
     borderRadius: 12,
     overflow: "hidden",
@@ -309,6 +474,43 @@ const styles = StyleSheet.create({
   camera: { width: "100%", height: 320, backgroundColor: "#090914" },
   permissionBox: { gap: 10 },
   form: { gap: 12 },
+  surveyLabel: {
+    color: "#c9c9e6",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 8,
+  },
+  choiceRow: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  choiceChip: {
+    borderWidth: 1,
+    borderColor: "#32324a",
+    backgroundColor: "#151526",
+    borderRadius: 999,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+  },
+  choiceChipSelected: {
+    borderColor: "#A990FF",
+    backgroundColor: "rgba(169,144,255,0.2)",
+  },
+  choiceChipText: {
+    color: "#e5e5f7",
+    fontSize: 11,
+    fontWeight: "600",
+    textTransform: "capitalize",
+  },
+  optionalHintWrap: {
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  optionalHintText: {
+    color: "#9ca3c4",
+    fontSize: 11,
+  },
   input: {
     backgroundColor: "rgba(0,0,0,0.5)",
     color: "#fff",

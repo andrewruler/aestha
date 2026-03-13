@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -16,53 +16,17 @@ import CaptureWizard, { CapturePayload } from "../components/CaptureWizard";
 import { BACKEND_URL } from "../src/config";
 import Avatar3D from "../components/Avatar3D";
 
-const CATALOG = [
-  {
-    id: "1",
-    label: "white t-shirt",
-    brand: "WOOYOUNGMI",
-    name: "Oversized Wool Blazer",
-    price: "$850",
-    image:
-      "https://images.unsplash.com/photo-1591047139829-d91aecb6caea?auto=format&fit=crop&q=80&w=400",
-  },
-  {
-    id: "2",
-    label: "blue jeans",
-    brand: "ANDERSSON BELL",
-    name: "Pleated Wide Trousers",
-    price: "$280",
-    image:
-      "https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?auto=format&fit=crop&q=80&w=400",
-  },
-  {
-    id: "3",
-    label: "black hoodie",
-    brand: "JUUN.J",
-    name: "Techwear Cargo Vest",
-    price: "$450",
-    image:
-      "https://images.unsplash.com/photo-1622470953794-aa9c70b0fb9d?auto=format&fit=crop&q=80&w=400",
-  },
-  {
-    id: "4",
-    label: "floral dress",
-    brand: "AESTHA CORE",
-    name: "Mohair Distressed Knit",
-    price: "$120",
-    image:
-      "https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=400",
-  },
-];
-
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const isDesktop = width > 800;
+  const [catalog, setCatalog] = useState<any[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
 
   const [hasScanned, setHasScanned] = useState(false);
   const [wizardActive, setWizardActive] = useState(false);
+  const [wizardMode, setWizardMode] = useState<"scan" | "upload">("scan");
   const [capturedPayload, setCapturedPayload] = useState<CapturePayload | null>(null);
-  const [selectedGarment, setSelectedGarment] = useState<string | null>(null);
+  const [selectedGarment, setSelectedGarment] = useState<any | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
@@ -72,10 +36,29 @@ export default function HomeScreen() {
   const primaryImageUri =
     capturedPayload?.front ?? capturedPayload?.side ?? capturedPayload?.face ?? null;
 
-  const handleStartScan = () => {
+  useEffect(() => {
+    const fetchCatalog = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/catalog`);
+        const data = await response.json();
+        if (data?.status === "success" && Array.isArray(data.catalog)) {
+          setCatalog(data.catalog);
+        }
+      } catch (error) {
+        console.error("Failed to load catalog:", error);
+      } finally {
+        setCatalogLoading(false);
+      }
+    };
+    fetchCatalog();
+  }, []);
+
+  const handleStartScan = (mode: "scan" | "upload" = "scan") => {
+    setWizardMode(mode);
     setWizardActive(true);
     setHasScanned(false);
     setCapturedPayload(null);
+    setSelectedGarment(null);
     setAnalysisResult(null);
     setTryOnResult(null);
     setTryOnError(null);
@@ -118,9 +101,16 @@ export default function HomeScreen() {
       if (payload.face) await appendImage(payload.face, "face.jpg", "face_image");
 
       if (payload.measurements.height) formData.append("height_cm", payload.measurements.height);
+      if (payload.measurements.chest) formData.append("chest_cm", payload.measurements.chest);
+      if (payload.measurements.waist) formData.append("waist_cm", payload.measurements.waist);
       if (payload.calculatedMath?.shoulderCm) formData.append("shoulder_cm", String(payload.calculatedMath.shoulderCm));
       if (payload.calculatedMath?.hipCm) formData.append("hip_cm", String(payload.calculatedMath.hipCm));
       formData.append("gender", "unknown");
+      if (payload.survey?.preferredFit) formData.append("fit_preference", payload.survey.preferredFit);
+      if (payload.survey?.preferredAesthetic) formData.append("aesthetic", payload.survey.preferredAesthetic);
+      if (payload.survey?.preferredFit) formData.append("preferred_fit", payload.survey.preferredFit);
+      if (payload.survey?.preferredPalette) formData.append("preferred_palette", payload.survey.preferredPalette);
+      if (payload.survey?.preferredAesthetic) formData.append("preferred_aesthetic", payload.survey.preferredAesthetic);
 
       const response = await fetch(`${BACKEND_URL}/analyze`, {
         method: "POST",
@@ -138,16 +128,13 @@ export default function HomeScreen() {
   };
 
   const handleGenerateTryOn = async () => {
-    if (!primaryImageUri || !selectedGarment) return;
+    if (!capturedPayload?.front || !selectedGarment) return;
     setTryOnError(null);
     setIsProcessing(true);
     try {
-      const garment = CATALOG.find((c) => c.id === selectedGarment);
-      if (!garment) throw new Error("Selected garment not found.");
-
       const formData = new FormData();
       if (Platform.OS === "web") {
-        const response = await fetch(primaryImageUri);
+        const response = await fetch(capturedPayload.front);
         const blob = await response.blob();
         const file =
           typeof File !== "undefined"
@@ -161,7 +148,7 @@ export default function HomeScreen() {
           type: "image/jpeg",
         } as any);
       }
-      formData.append("clothing_item", garment.label);
+      formData.append("clothing_item", selectedGarment.label);
 
       const response = await fetch(`${BACKEND_URL}/try-on`, {
         method: "POST",
@@ -205,11 +192,7 @@ export default function HomeScreen() {
         <View style={[styles.mainContainer, isDesktop && styles.mainContainerDesktop]}>
           <View style={styles.column}>
             {!hasScanned ? (
-              <TouchableOpacity
-                style={styles.heroScanner}
-                onPress={handleStartScan}
-                activeOpacity={0.8}
-              >
+              <View style={styles.heroScanner}>
                 <View style={styles.scannerReticle}>
                   <Ionicons name="scan-outline" size={48} color="#A990FF" />
                 </View>
@@ -217,10 +200,21 @@ export default function HomeScreen() {
                 <Text style={styles.heroSub}>
                   Calibrate your 3D geometry for perfect tailoring.
                 </Text>
-                <View style={styles.heroButton}>
+                <TouchableOpacity
+                  style={styles.heroButton}
+                  onPress={() => handleStartScan("scan")}
+                  activeOpacity={0.8}
+                >
                   <Text style={styles.heroButtonText}>START SCAN</Text>
-                </View>
-              </TouchableOpacity>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.altHeroButton}
+                  onPress={() => handleStartScan("upload")}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.altHeroButtonText}>OR UPLOAD PHOTOS MANUALLY</Text>
+                </TouchableOpacity>
+              </View>
             ) : (
               <View style={styles.profileCard}>
                 <View style={styles.profileHeader}>
@@ -230,6 +224,7 @@ export default function HomeScreen() {
                       setHasScanned(false);
                       setWizardActive(false);
                       setCapturedPayload(null);
+                      setSelectedGarment(null);
                       setAnalysisResult(null);
                       setTryOnResult(null);
                       setTryOnError(null);
@@ -314,7 +309,7 @@ export default function HomeScreen() {
 
             {wizardActive && (
               <View style={styles.wizardCard}>
-                <CaptureWizard onComplete={handleScanComplete} />
+                <CaptureWizard onComplete={handleScanComplete} mode={wizardMode} />
               </View>
             )}
 
@@ -347,31 +342,39 @@ export default function HomeScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.carouselContainer}
             >
-              {CATALOG.map((item) => {
-                const isSelected = selectedGarment === item.id;
-                return (
-                  <TouchableOpacity
-                    key={item.id}
-                    style={[styles.garmentCard, isSelected && styles.garmentCardSelected]}
-                    onPress={() => setSelectedGarment(item.id)}
-                    activeOpacity={0.9}
-                  >
-                    <Image source={{ uri: item.image }} style={styles.garmentImage} />
-                    <View style={styles.garmentInfo}>
-                      <Text style={styles.garmentBrand}>{item.brand}</Text>
-                      <Text style={styles.garmentName} numberOfLines={1}>
-                        {item.name}
-                      </Text>
-                      <Text style={styles.garmentPrice}>{item.price}</Text>
-                    </View>
-                    {isSelected && (
-                      <View style={styles.selectedBadge}>
-                        <Ionicons name="checkmark" size={16} color="#000" />
+              {catalogLoading ? (
+                <ActivityIndicator color="#A990FF" style={{ margin: 20 }} />
+              ) : catalog.length ? (
+                catalog.map((item) => {
+                  const isSelected = selectedGarment?.id === item.id;
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={[styles.garmentCard, isSelected && styles.garmentCardSelected]}
+                      onPress={() => setSelectedGarment(item)}
+                      activeOpacity={0.9}
+                    >
+                      <Image source={{ uri: item.image }} style={styles.garmentImage} />
+                      <View style={styles.garmentInfo}>
+                        <Text style={styles.garmentBrand}>{item.brand}</Text>
+                        <Text style={styles.garmentName} numberOfLines={1}>
+                          {item.name}
+                        </Text>
+                        <Text style={styles.garmentPrice}>{item.price}</Text>
                       </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
+                      {isSelected && (
+                        <View style={styles.selectedBadge}>
+                          <Ionicons name="checkmark" size={16} color="#000" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })
+              ) : (
+                <Text style={styles.catalogErrorText}>
+                  Could not load inventory right now. Please refresh.
+                </Text>
+              )}
             </ScrollView>
           </View>
         </View>
@@ -418,7 +421,7 @@ const styles = StyleSheet.create({
   },
   logo: { color: "#FFFFFF", fontSize: 18, fontWeight: "800", letterSpacing: 6 },
   scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 120 },
+  scrollContent: { padding: 20, paddingBottom: 170 },
   mainContainer: { gap: 24 },
   mainContainerDesktop: {
     flexDirection: "row",
@@ -463,6 +466,20 @@ const styles = StyleSheet.create({
     borderRadius: 100,
   },
   heroButtonText: { color: "#000000", fontWeight: "700", fontSize: 12, letterSpacing: 1 },
+  altHeroButton: {
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: "#3a3a4f",
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  altHeroButtonText: {
+    color: "#d7d7ef",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1,
+  },
   wizardCard: {
     backgroundColor: "#121212",
     borderRadius: 24,
@@ -516,6 +533,12 @@ const styles = StyleSheet.create({
   mathLabel: { color: "#666", fontSize: 10, letterSpacing: 1, marginBottom: 4 },
   mathValue: { color: "#FFF", fontSize: 16, fontWeight: "600" },
   carouselContainer: { paddingHorizontal: 10, gap: 16 },
+  catalogErrorText: {
+    color: "#8f8fa8",
+    fontSize: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
   garmentCard: {
     width: 220,
     backgroundColor: "#121212",
@@ -560,7 +583,7 @@ const styles = StyleSheet.create({
   secondaryButtonText: { color: "#888", fontSize: 14, fontWeight: "600" },
   floatingActionArea: {
     position: "absolute",
-    bottom: 40,
+    bottom: Platform.OS === "web" ? 28 : 40,
     alignSelf: "center",
     width: "100%",
     maxWidth: 400,
