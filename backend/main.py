@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 import google.generativeai as genai
@@ -34,6 +34,8 @@ model = genai.GenerativeModel("models/gemini-3-flash-preview")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://ljrkmsffunpuouqvfvsj.supabase.co")
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "uploads")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "true").strip().lower() != "false"
 DEFAULT_GARMENT_IMAGE_URL = "https://v3.fal.media/files/elephant/qXMQpeM6fVOlg7bZs0dEh_fashn-tshirt-2.png"
 
 # Upgraded Retail Catalog with UI Metadata
@@ -170,6 +172,48 @@ def get_fashn_api_key():
     cleaned = raw.strip().strip('"').strip("'").strip()
     return cleaned or None
 
+
+def verify_supabase_bearer(authorization: Optional[str]) -> dict:
+    """
+    Validate Supabase JWT by introspecting /auth/v1/user.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        raise HTTPException(status_code=500, detail="Supabase auth verification is not configured")
+
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {token}",
+            },
+            timeout=15,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Auth provider unavailable: {exc}")
+
+    if not resp.ok:
+        raise HTTPException(status_code=401, detail="Invalid or expired auth token")
+
+    user_data = resp.json()
+    if not user_data.get("id"):
+        raise HTTPException(status_code=401, detail="Auth token has no user identity")
+
+    return user_data
+
+
+def require_authenticated_user(authorization: Optional[str] = Header(None)) -> dict:
+    if not AUTH_REQUIRED:
+        return {"id": "dev-user", "email": "dev@local"}
+    return verify_supabase_bearer(authorization)
+
 @app.get("/")
 async def root():
     return RedirectResponse(url="/docs")
@@ -213,6 +257,14 @@ async def health_fashn_auth():
             "key_length": len(fashn_api_key),
         }
 
+@app.get("/health/auth")
+async def health_auth_config():
+    return {
+        "auth_required": AUTH_REQUIRED,
+        "supabase_url_configured": bool(SUPABASE_URL),
+        "supabase_anon_key_configured": bool(SUPABASE_ANON_KEY),
+    }
+
 
 @app.get("/catalog")
 async def get_catalog():
@@ -236,6 +288,7 @@ async def get_catalog():
 
 @app.post("/try-on")
 async def generate_try_on(
+    current_user: dict = Depends(require_authenticated_user),
     user_image: UploadFile = File(...),
     garment_image_url: str = Form(""),
     category: str = Form("tops"),
@@ -358,7 +411,12 @@ async def generate_try_on(
                 or status_data.get("result_image_url")
                 or status_data.get("output_image")
             )
-            return {"status": "completed", "job_id": job_id, "result_image_url": result_url}
+            return {
+                "status": "completed",
+                "job_id": job_id,
+                "result_image_url": result_url,
+                "user_id": current_user.get("id"),
+            }
 
         if status in ("failed", "error"):
             return {"status": "error", "job_id": job_id, "details": status_data}
@@ -384,6 +442,7 @@ async def list_available_models():
 
 @app.post("/analyze")
 async def analyze(
+    current_user: dict = Depends(require_authenticated_user),
     front_image: Optional[UploadFile] = File(None),
     face_image: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),  # Backward-compatible fallback
@@ -475,7 +534,8 @@ async def analyze(
             "schema_version": "v3",
             "request_id": str(int(time.time())),
             "status": "success",
-            "analysis": ai_data
+            "analysis": ai_data,
+            "user_id": current_user.get("id"),
         }
     except Exception as e:
         return {

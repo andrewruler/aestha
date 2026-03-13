@@ -20,8 +20,8 @@ export default function ProfileScreen() {
     );
   }
 
-  const handleSignOut = () => {
-    signOut();
+  const handleSignOut = async () => {
+    await signOut();
     Alert.alert("Signed out", "You are now in guest mode.");
     router.replace("/");
   };

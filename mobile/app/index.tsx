@@ -70,7 +70,7 @@ const parseJsonSafe = (raw: string) => {
 };
 
 export default function HomeScreen() {
-  const { user, hasSeenTutorial } = useAuth();
+  const { user, accessToken, isAuthReady, hasSeenTutorial } = useAuth();
   const { width } = useWindowDimensions();
   const isDesktop = width > 980;
   const [activeTab, setActiveTab] = useState<AppTab>("studio");
@@ -176,6 +176,13 @@ export default function HomeScreen() {
     setTryOnError(null);
     addActivity("Spatial profile captured.", "success");
 
+    if (!user || !accessToken) {
+      Alert.alert("Login required", "Please log in to run AI analysis.");
+      router.push("/login");
+      addActivity("Analysis paused until login.");
+      return;
+    }
+
     const primaryUri = payload.front ?? payload.side ?? payload.face ?? null;
     if (!primaryUri) return;
 
@@ -212,7 +219,10 @@ export default function HomeScreen() {
       const response = await fetch(`${BACKEND_URL}/analyze`, {
         method: "POST",
         body: formData,
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
       });
       const raw = await response.text();
       const parsed = parseJsonSafe(raw) as AnalysisResponse;
@@ -228,6 +238,11 @@ export default function HomeScreen() {
   };
 
   const handleGenerateTryOn = async () => {
+    if (!user || !accessToken) {
+      Alert.alert("Login required", "Please log in to run secure try-on synthesis.");
+      router.push("/login");
+      return;
+    }
     if (!capturedPayload?.front || !selectedGarment) {
       Alert.alert("Missing Data", "Please complete your scan and select an item from the archive.");
       return;
@@ -246,7 +261,10 @@ export default function HomeScreen() {
       const response = await fetch(`${BACKEND_URL}/try-on`, {
         method: "POST",
         body: formData,
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
       });
       const raw = await response.text();
       const json = parseJsonSafe(raw);
@@ -338,7 +356,9 @@ export default function HomeScreen() {
 
       <View style={styles.authStrip}>
         <Text style={styles.authStripText}>
-          {user
+          {!isAuthReady
+            ? "Loading secure session..."
+            : user
             ? `Signed in as ${user.name}${hasSeenTutorial ? "" : " • tutorial recommended"}`
             : "Guest mode active. Log in to persist wardrobe and profile preferences."}
         </Text>
@@ -597,7 +617,11 @@ export default function HomeScreen() {
 
                 <View style={styles.actionCard}>
                   <Text style={styles.actionHint}>
-                    {hasScanned
+                    {!isAuthReady
+                      ? "Checking session..."
+                      : !user
+                        ? "Login required before synthesis."
+                        : hasScanned
                       ? selectedGarment
                         ? "Ready to synthesize your selected archive item."
                         : "Select an archive item to begin synthesis."
@@ -606,10 +630,15 @@ export default function HomeScreen() {
                   <TouchableOpacity
                     style={[
                       styles.primaryAction,
-                      (!hasScanned || !selectedGarment || isProcessing) && styles.primaryActionDisabled,
+                      (!isAuthReady ||
+                        !user ||
+                        !hasScanned ||
+                        !selectedGarment ||
+                        isProcessing) &&
+                        styles.primaryActionDisabled,
                     ]}
                     onPress={handleGenerateTryOn}
-                    disabled={!hasScanned || !selectedGarment || isProcessing}
+                    disabled={!isAuthReady || !user || !hasScanned || !selectedGarment || isProcessing}
                   >
                     {isProcessing ? (
                       <ActivityIndicator color="#000" />

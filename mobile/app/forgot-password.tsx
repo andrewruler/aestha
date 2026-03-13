@@ -1,16 +1,23 @@
 import React, { useState } from "react";
 import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Link } from "expo-router";
+import { useAuth } from "@/context/AuthContext";
 
 export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState("");
+  const { sendPasswordReset } = useAuth();
 
-  const handleReset = () => {
+  const handleReset = async () => {
     if (!email.trim()) {
       Alert.alert("Missing email", "Please enter your account email.");
       return;
     }
-    Alert.alert("Reset link sent", `A password reset email was sent to ${email.trim()}.`);
+    try {
+      await sendPasswordReset(email);
+      Alert.alert("Reset link sent", `A password reset email was sent to ${email.trim()}.`);
+    } catch (error) {
+      Alert.alert("Reset failed", String(error));
+    }
   };
 
   return (

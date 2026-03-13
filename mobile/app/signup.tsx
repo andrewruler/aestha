@@ -14,7 +14,11 @@ export default function SignupScreen() {
     setLoading(true);
     try {
       await signUp(name, email, password);
-      router.replace("/tutorial");
+      Alert.alert(
+        "Account created",
+        "If email confirmation is enabled, check your inbox before logging in."
+      );
+      router.replace("/login");
     } catch (error) {
       Alert.alert("Sign up failed", String(error));
     } finally {
