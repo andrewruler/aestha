@@ -15,6 +15,7 @@ import {
 import SpatialCamera from "../components/SpatialCamera";
 import { BACKEND_URL } from "../src/config";
 import Avatar3D from "../components/Avatar3D";
+import CaptureWizard from '../components/CaptureWizard';
 
 export default function HomeScreen() {
   const [isCameraActive, setIsCameraActive] = useState(false);

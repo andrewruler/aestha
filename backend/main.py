@@ -211,11 +211,20 @@ async def generate_try_on(
         "Content-Type": "application/json",
     }
 
+    # FASHN v1.6 uses the universal /v1/run format:
+    # {
+    #   "model_name": "tryon-v1.6",
+    #   "inputs": { "model_image": "...", "garment_image": "...", ... }
+    # }
     run_payload = {
-        "model_image": user_image_url,
-        "garment_image": garment["url"],
-        "category": garment["category"],
-        "nsfw_filter": True,
+        "model_name": "tryon-v1.6",
+        "inputs": {
+            "model_image": user_image_url,
+            "garment_image": garment["url"],
+            "category": garment["category"],
+            "mode": "balanced",
+            "moderation_level": "permissive",
+        },
     }
 
     # 3. Start the FASHN job
@@ -268,8 +277,11 @@ async def generate_try_on(
 
         status = status_data.get("status")
         if status == "completed":
+            output = status_data.get("output") or []
+            first_output = output[0] if isinstance(output, list) and output else None
             result_url = (
-                status_data.get("image_url")
+                first_output
+                or status_data.get("image_url")
                 or status_data.get("result_image_url")
                 or status_data.get("output_image")
                 or user_image_url
