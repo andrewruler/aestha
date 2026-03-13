@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, Text, Button } from 'react-native';
-import { Camera, useCameraDevice } from 'react-native-vision-camera';
+import { StyleSheet, View, Text, Button, Platform } from 'react-native';
+
+// Dynamically require VisionCamera only on native platforms (Android/iOS),
+// since it does not support web.
+let VisionCamera: any = null;
+if (Platform.OS !== 'web') {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  VisionCamera = require('react-native-vision-camera');
+}
 // In a full implementation, you would import and use a pose/landmark detector here.
 
 type SpatialCameraProps = {
@@ -9,8 +16,19 @@ type SpatialCameraProps = {
 };
 
 export default function SpatialCamera({ onCapture }: SpatialCameraProps) {
+  // VisionCamera does not support web; short-circuit to avoid runtime errors when running `npm run web`.
+  if (Platform.OS === 'web' || !VisionCamera) {
+    return (
+      <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text>Camera is only available on Android/iOS builds.</Text>
+      </View>
+    );
+  }
+
+  const { Camera, useCameraDevice } = VisionCamera;
+
   const device = useCameraDevice('front');
-  const cameraRef = useRef<Camera | null>(null);
+  const cameraRef = useRef<typeof Camera | null>(null as any);
   const [hasPermission, setHasPermission] = useState(false);
   const [bodyRatio, setBodyRatio] = useState<string | null>('1.0');
 
