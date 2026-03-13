@@ -29,31 +29,32 @@ model = genai.GenerativeModel("models/gemini-3-flash-preview")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://ljrkmsffunpuouqvfvsj.supabase.co")
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "uploads")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
+DEFAULT_GARMENT_IMAGE_URL = "https://v3.fal.media/files/elephant/qXMQpeM6fVOlg7bZs0dEh_fashn-tshirt-2.png"
 
 # Simple mapping from Gemini clothing labels to garment image URLs
 GARMENT_CATALOG = {
     "white t-shirt": {
-        "url": "https://i.ibb.co/pLp1pMh/white-tshirt.png",
+        "url": DEFAULT_GARMENT_IMAGE_URL,
         "category": "tops",
         "aliases": ["white tee", "tshirt", "t-shirt", "tee shirt"],
     },
     "blue jeans": {
-        "url": "https://i.ibb.co/M9vGv1s/blue-jeans.png",
+        "url": DEFAULT_GARMENT_IMAGE_URL,
         "category": "bottoms",
         "aliases": ["jeans", "denim jeans", "blue denim"],
     },
     "black hoodie": {
-        "url": "https://i.ibb.co/6y4T0h9/black-hoodie.png",
+        "url": DEFAULT_GARMENT_IMAGE_URL,
         "category": "tops",
         "aliases": ["hoodie", "black sweatshirt"],
     },
     "floral dress": {
-        "url": "https://i.ibb.co/RQYh5Z5/floral-dress.png",
+        "url": DEFAULT_GARMENT_IMAGE_URL,
         "category": "one-pieces",
         "aliases": ["dress", "floral one piece"],
     },
     "beige chinos": {
-        "url": "https://i.ibb.co/vX3wVfQ/beige-chinos.png",
+        "url": DEFAULT_GARMENT_IMAGE_URL,
         "category": "bottoms",
         "aliases": ["chinos", "beige pants"],
     },
@@ -115,6 +116,22 @@ def resolve_garment(label: str):
         return GARMENT_CATALOG["white t-shirt"]
 
     return None
+
+
+def validate_or_fallback_garment_url(url: str) -> str:
+    """
+    Ensure garment URL is externally fetchable by FASHN.
+    If not, fall back to a known working public garment URL.
+    """
+    try:
+        resp = requests.get(url, timeout=12, stream=True)
+        ok = resp.status_code < 400
+        resp.close()
+        if ok:
+            return url
+    except Exception:
+        pass
+    return DEFAULT_GARMENT_IMAGE_URL
 
 
 def get_fashn_api_key():
@@ -200,6 +217,7 @@ async def generate_try_on(
             "status": "error",
             "message": f"No garment image mapped for clothing item '{clothing_item}'",
         }
+    garment_url = validate_or_fallback_garment_url(garment["url"])
 
     fashn_api_key = get_fashn_api_key()
     if not fashn_api_key:
@@ -220,7 +238,7 @@ async def generate_try_on(
         "model_name": "tryon-v1.6",
         "inputs": {
             "model_image": user_image_url,
-            "garment_image": garment["url"],
+            "garment_image": garment_url,
             "category": garment["category"],
             "mode": "balanced",
             "moderation_level": "permissive",

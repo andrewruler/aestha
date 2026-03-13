@@ -1,705 +1,492 @@
 import React, { useState } from "react";
 import {
-  Button,
-  Text,
   View,
+  Text,
   ScrollView,
-  ActivityIndicator,
-  Alert,
   Image,
   TouchableOpacity,
-  useWindowDimensions,
   StyleSheet,
+  ActivityIndicator,
   Platform,
+  useWindowDimensions,
+  Alert,
 } from "react-native";
-import SpatialCamera from "../components/SpatialCamera";
+import { Ionicons } from "@expo/vector-icons";
+import CaptureWizard, { CapturePayload } from "../components/CaptureWizard";
 import { BACKEND_URL } from "../src/config";
-import Avatar3D from "../components/Avatar3D";
-import CaptureWizard from '../components/CaptureWizard';
+
+const CATALOG = [
+  {
+    id: "1",
+    label: "white t-shirt",
+    brand: "WOOYOUNGMI",
+    name: "Oversized Wool Blazer",
+    price: "$850",
+    image:
+      "https://images.unsplash.com/photo-1591047139829-d91aecb6caea?auto=format&fit=crop&q=80&w=400",
+  },
+  {
+    id: "2",
+    label: "blue jeans",
+    brand: "ANDERSSON BELL",
+    name: "Pleated Wide Trousers",
+    price: "$280",
+    image:
+      "https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?auto=format&fit=crop&q=80&w=400",
+  },
+  {
+    id: "3",
+    label: "black hoodie",
+    brand: "JUUN.J",
+    name: "Techwear Cargo Vest",
+    price: "$450",
+    image:
+      "https://images.unsplash.com/photo-1622470953794-aa9c70b0fb9d?auto=format&fit=crop&q=80&w=400",
+  },
+  {
+    id: "4",
+    label: "floral dress",
+    brand: "AESTHA CORE",
+    name: "Mohair Distressed Knit",
+    price: "$120",
+    image:
+      "https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?auto=format&fit=crop&q=80&w=400",
+  },
+];
 
 export default function HomeScreen() {
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [tryOnLoading, setTryOnLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
-  const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
-  const [tryOnImage, setTryOnImage] = useState<string | null>(null);
-  const [lastRatio, setLastRatio] = useState<string | null>(null);
-  const [gender, setGender] = useState<"male" | "female" | null>(null);
-  const [selectedOutfit, setSelectedOutfit] = useState<string | null>(null);
-  const [tryOnError, setTryOnError] = useState<string | null>(null);
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-
   const { width } = useWindowDimensions();
-  const isWideLayout = width >= 900;
+  const isDesktop = width > 800;
 
-  const addLog = (message: string) => {
-    const timestamp = new Date().toISOString().split("T")[1]?.split(".")[0] || "";
-    const line = `[${timestamp}] ${message}`;
-    console.log(line);
-    setDebugLogs((prev) => [...prev.slice(-59), line]);
-  };
+  const [hasScanned, setHasScanned] = useState(false);
+  const [wizardActive, setWizardActive] = useState(false);
+  const [capturedPayload, setCapturedPayload] = useState<CapturePayload | null>(null);
+  const [selectedGarment, setSelectedGarment] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [tryOnResult, setTryOnResult] = useState<string | null>(null);
+  const [tryOnError, setTryOnError] = useState<string | null>(null);
 
-  const showError = (title: string, message: string) => {
-    addLog(`[error] ${title}: ${message}`);
-    Alert.alert(title, message);
-    if (Platform.OS === "web" && typeof window !== "undefined" && window.alert) {
-      window.alert(`${title}: ${message}`);
-    }
-  };
+  const primaryImageUri =
+    capturedPayload?.front ?? capturedPayload?.side ?? capturedPayload?.face ?? null;
 
-  // Initial Analysis Upload: receives the captured photo URI and spatial ratio from SpatialCamera
-  const handleCaptureAndUpload = async (uri: string | null, ratio: string | null) => {
-    addLog(
-      `[analyze] capture received | uri=${uri ? "yes" : "no"} | ratio=${ratio ?? "null"} | platform=${Platform.OS}`
-    );
-    setCapturedImageUri(uri);
-    if (ratio) setLastRatio(ratio);
-    setIsCameraActive(false);
-
-    // Require a valid image; ratio can fall back to "unknown"
-    if (!uri) {
-      Alert.alert(
-        "Capture failed",
-        "We couldn't capture a photo from the camera. Please try again."
-      );
-      return;
-    }
-
-    setLoading(true);
-    setResult(null);
+  const handleStartScan = () => {
+    setWizardActive(true);
+    setTryOnResult(null);
     setTryOnError(null);
-
-    const formData = new FormData();
-
-    if (Platform.OS === "web") {
-      // On web, convert the captured URI (blob/data URL) into a real File/Blob
-      try {
-        const response = await fetch(uri);
-        const blob = await response.blob();
-        addLog(`[analyze] web blob prepared | type=${blob.type || "unknown"} size=${blob.size}`);
-        const webFile =
-          typeof File !== "undefined"
-            ? new File([blob], "spatial_capture.jpg", {
-                type: blob.type || "image/jpeg",
-              })
-            : blob;
-        formData.append("image", webFile as any);
-      } catch (e) {
-        Alert.alert("Upload Error", "Could not read captured image in browser.");
-        return;
-      }
-    } else {
-      // On native, React Native's fetch understands the { uri, name, type } pattern
-      formData.append("image", {
-        uri,
-        name: "spatial_capture.jpg",
-        type: "image/jpeg",
-      } as any);
-    }
-    if (ratio) {
-      formData.append("body_ratio", ratio);
-    }
-    if (gender) {
-      formData.append("gender", gender);
-    }
-
-    try {
-      addLog("[analyze] request start -> /analyze");
-      const response = await fetch(`${BACKEND_URL}/analyze`, {
-        method: "POST",
-        body: formData,
-        headers: {
-          Accept: "application/json",
-        },
-      });
-      const raw = await response.text();
-      addLog(`[analyze] response status=${response.status} body=${raw.slice(0, 260)}`);
-      const json = raw ? JSON.parse(raw) : {};
-      setResult(json);
-    } catch (e) {
-      showError("Analysis Error", String(e));
-    } finally {
-      setLoading(false);
-    }
   };
-  const startPolling = (jobId: string) => {
-    // Polling is no longer needed with the synchronous stub backend.
-    // This function is kept for future FASHN integration.
-  };
-  // Trigger Member B's Try-On Endpoint
-  const handleTryOn = async (itemLabel: string) => {
-    if (!capturedImageUri) return;
 
-    setTryOnLoading(true);
+  const handleScanComplete = (payload: CapturePayload) => {
+    setCapturedPayload(payload);
+    setWizardActive(false);
+    setHasScanned(true);
+  };
+
+  const handleGenerateTryOn = async () => {
+    if (!primaryImageUri || !selectedGarment) return;
     setTryOnError(null);
+    setIsProcessing(true);
     try {
-      addLog(
-        `[try-on] start | item=${itemLabel} | hasImage=${capturedImageUri ? "yes" : "no"} | platform=${Platform.OS}`
-      );
+      const garment = CATALOG.find((c) => c.id === selectedGarment);
+      if (!garment) throw new Error("Selected garment not found.");
+
       const formData = new FormData();
       if (Platform.OS === "web") {
-        try {
-          const response = await fetch(capturedImageUri);
-          const blob = await response.blob();
-          addLog(`[try-on] web blob prepared | type=${blob.type || "unknown"} size=${blob.size}`);
-          const webFile =
-            typeof File !== "undefined"
-              ? new File([blob], "tryon.jpg", {
-                  type: blob.type || "image/jpeg",
-                })
-              : blob;
-          formData.append("user_image", webFile as any);
-        } catch (e) {
-          showError("Try-On Error", "Could not read captured image in browser.");
-          return;
-        }
+        const response = await fetch(primaryImageUri);
+        const blob = await response.blob();
+        const file =
+          typeof File !== "undefined"
+            ? new File([blob], "tryon.jpg", { type: blob.type || "image/jpeg" })
+            : blob;
+        formData.append("user_image", file as any);
       } else {
         formData.append("user_image", {
-          uri: capturedImageUri,
+          uri: primaryImageUri,
           name: "tryon.jpg",
           type: "image/jpeg",
         } as any);
       }
-      formData.append("clothing_item", String(itemLabel));
+      formData.append("clothing_item", garment.label);
 
-      addLog("[try-on] request start -> /try-on");
       const response = await fetch(`${BACKEND_URL}/try-on`, {
         method: "POST",
         body: formData,
-        headers: {
-          Accept: "application/json",
-        },
+        headers: { Accept: "application/json" },
       });
       const raw = await response.text();
-      addLog(`[try-on] response status=${response.status} body=${raw.slice(0, 300)}`);
-
-      let json: any = {};
-      try {
-        json = raw ? JSON.parse(raw) : {};
-      } catch {
-        throw new Error(`Non-JSON /try-on response: ${raw.slice(0, 180)}`);
-      }
+      const json = raw ? JSON.parse(raw) : {};
 
       if (!response.ok || json?.status !== "completed" || !json?.result_image_url) {
-        const message = json?.message || json?.details?.message || `Try-on failed (HTTP ${response.status})`;
-        setTryOnError(message);
+        const message =
+          json?.message ||
+          json?.details?.message ||
+          `Try-on failed (HTTP ${response.status})`;
         throw new Error(message);
       }
 
-      setTryOnImage(json.result_image_url);
-      addLog(`[try-on] completed | result=${json.result_image_url}`);
-      Alert.alert("Try-On Ready", `Here’s your look for ${itemLabel}.`);
+      setTryOnResult(json.result_image_url);
     } catch (e) {
-      const errMsg = String(e);
-      setTryOnError(errMsg);
-      showError("Try-On Failed", errMsg);
+      const msg = String(e);
+      setTryOnError(msg);
+      Alert.alert("Try-On Failed", msg);
     } finally {
-      setTryOnLoading(false);
+      setIsProcessing(false);
     }
   };
 
-  if (isCameraActive) {
-    return <SpatialCamera onCapture={handleCaptureAndUpload} />;
-  }
-
-  const outfits: any[] = result?.analysis?.detected_outfit?.items ?? [];
-
   return (
     <View style={styles.root}>
+      <View style={styles.header}>
+        <Ionicons name="menu-outline" size={28} color="#FFFFFF" />
+        <Text style={styles.logo}>A E S T H A</Text>
+        <Ionicons name="person-circle-outline" size={28} color="#FFFFFF" />
+      </View>
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
-        bounces={false}
+        showsVerticalScrollIndicator={false}
       >
-        <View style={styles.header}>
-          <Text style={styles.title}>Aestha</Text>
-          <Text style={styles.subtitle}>
-            Asian fashion & K-style virtual try-on
-          </Text>
-        </View>
+        <View style={[styles.mainContainer, isDesktop && styles.mainContainerDesktop]}>
+          <View style={styles.column}>
+            {!hasScanned ? (
+              <TouchableOpacity
+                style={styles.heroScanner}
+                onPress={handleStartScan}
+                activeOpacity={0.8}
+              >
+                <View style={styles.scannerReticle}>
+                  <Ionicons name="scan-outline" size={48} color="#A990FF" />
+                </View>
+                <Text style={styles.heroTitle}>Initialize Studio</Text>
+                <Text style={styles.heroSub}>
+                  Calibrate your 3D geometry for perfect tailoring.
+                </Text>
+                <View style={styles.heroButton}>
+                  <Text style={styles.heroButtonText}>START SCAN</Text>
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.profileCard}>
+                <View style={styles.profileHeader}>
+                  <Text style={styles.sectionTitle}>SPATIAL PROFILE</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setHasScanned(false);
+                      setWizardActive(false);
+                      setCapturedPayload(null);
+                      setTryOnResult(null);
+                      setTryOnError(null);
+                    }}
+                  >
+                    <Text style={styles.recalText}>Recalibrate</Text>
+                  </TouchableOpacity>
+                </View>
 
-        <View
-          style={[
-            styles.mainContent,
-            isWideLayout ? styles.mainContentRow : styles.mainContentColumn,
-          ]}
-        >
-          {/* Left: capture + analysis */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Upload or Capture Your Photo</Text>
-            <Text style={styles.cardSubtitle}>
-              Use your webcam or phone camera to create a personalized style profile.
-            </Text>
+                <View style={styles.avatarPlaceholder}>
+                  {primaryImageUri ? (
+                    <Image source={{ uri: primaryImageUri }} style={styles.profilePreview} />
+                  ) : (
+                    <Ionicons name="body-outline" size={80} color="#333" />
+                  )}
+                  <Text style={styles.avatarLabel}>Mesh Locked: Active</Text>
+                </View>
 
-            <View style={styles.captureRow}>
-              <Button
-                title="📸 Open Spatial Camera"
-                onPress={() => setIsCameraActive(true)}
-                color="#8338ec"
-              />
-            </View>
-
-            {capturedImageUri && (
-              <View style={styles.previewWrapper}>
-                <Image
-                  source={{ uri: capturedImageUri }}
-                  style={styles.previewImage}
-                />
-                <Text style={styles.previewLabel}>Latest capture</Text>
+                <View style={styles.mathRow}>
+                  <View style={styles.mathStat}>
+                    <Text style={styles.mathLabel}>HEIGHT</Text>
+                    <Text style={styles.mathValue}>
+                      {capturedPayload?.measurements.height || "--"} cm
+                    </Text>
+                  </View>
+                  <View style={styles.mathStat}>
+                    <Text style={styles.mathLabel}>CHEST</Text>
+                    <Text style={styles.mathValue}>
+                      {capturedPayload?.measurements.chest || "--"} cm
+                    </Text>
+                  </View>
+                  <View style={styles.mathStat}>
+                    <Text style={styles.mathLabel}>WAIST</Text>
+                    <Text style={styles.mathValue}>
+                      {capturedPayload?.measurements.waist || "--"} cm
+                    </Text>
+                  </View>
+                  <View style={styles.mathStat}>
+                    <Text style={styles.mathLabel}>HIPS</Text>
+                    <Text style={styles.mathValue}>
+                      {capturedPayload?.measurements.hips || "--"} cm
+                    </Text>
+                  </View>
+                </View>
               </View>
             )}
 
-            {/* Gender selection */}
-            <View style={styles.genderSection}>
-              <Text style={styles.genderTitle}>Gender Selection</Text>
-              <View style={styles.genderButtons}>
+            {wizardActive && (
+              <View style={styles.wizardCard}>
+                <CaptureWizard onComplete={handleScanComplete} />
+              </View>
+            )}
+
+            {tryOnResult && (
+              <View style={styles.resultCard}>
+                <Text style={styles.sectionTitle}>SYNTHESIS COMPLETE</Text>
+                <Image source={{ uri: tryOnResult }} style={styles.resultImage} />
                 <TouchableOpacity
-                  style={[
-                    styles.genderButton,
-                    gender === "male" && styles.genderButtonSelected,
-                  ]}
-                  onPress={() => setGender("male")}
+                  style={styles.secondaryButton}
+                  onPress={() => setTryOnResult(null)}
                 >
-                  <Text style={styles.genderEmoji}>👨</Text>
-                  <Text style={styles.genderText}>Male</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.genderButton,
-                    gender === "female" && styles.genderButtonSelected,
-                  ]}
-                  onPress={() => setGender("female")}
-                >
-                  <Text style={styles.genderEmoji}>👩</Text>
-                  <Text style={styles.genderText}>Female</Text>
+                  <Text style={styles.secondaryButtonText}>Discard & Try Another</Text>
                 </TouchableOpacity>
               </View>
-              <Text style={styles.genderHint}>
-                Used to fine-tune recommendations and silhouettes.
-              </Text>
-            </View>
-
-            {loading && (
-              <View style={styles.loadingBlock}>
-                <ActivityIndicator size="large" color="#8338ec" />
-                <Text style={styles.loadingText}>
-                  Analyzing proportions & style…
-                </Text>
-              </View>
             )}
 
-            {/* Spatial analysis */}
-            {result?.analysis?.spatial_analysis && (
-              <View style={styles.analysisCard}>
-                <Text style={styles.analysisTitle}>Your Style Analysis</Text>
-                <Text style={styles.analysisChip}>
-                  Shape: {result.analysis.spatial_analysis.body_shape}
-                </Text>
-                <Text style={styles.analysisBody}>
-                  {result.analysis.spatial_analysis.fit_advice}
-                </Text>
-              </View>
-            )}
-
-            {/* 3D avatar */}
-            {result?.analysis?.spatial_analysis && (
-              <View style={styles.avatarSection}>
-                <Text style={styles.avatarTitle}>3D Spatial Profile</Text>
-                <Avatar3D rawRatio={lastRatio} />
-                <Text style={styles.avatarCaption}>
-                  Real-time mannequin driven by your shoulder–hip ratio.
-                </Text>
-              </View>
-            )}
-
-            {!loading && !result && (
-              <Text style={styles.emptyState}>
-                No analysis yet. Capture a photo to begin.
-              </Text>
-            )}
+            {!!tryOnError && <Text style={styles.errorText}>{tryOnError}</Text>}
           </View>
 
-          {/* Right: outfits + try-on */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Celebrity Outfits</Text>
-            <Text style={styles.cardSubtitle}>
-              Select a look to virtually try on with your captured photo.
+          <View
+            style={[styles.column, { opacity: hasScanned ? 1 : 0.4 }]}
+            pointerEvents={hasScanned ? "auto" : "none"}
+          >
+            <Text style={[styles.sectionTitle, { marginLeft: 10, marginTop: isDesktop ? 0 : 20 }]}>
+              THE ARCHIVE
             </Text>
 
-            <View style={styles.outfitGrid}>
-              {outfits.map((item: any, index: number) => {
-                const isSelected = selectedOutfit === item.label;
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.carouselContainer}
+            >
+              {CATALOG.map((item) => {
+                const isSelected = selectedGarment === item.id;
                 return (
                   <TouchableOpacity
-                    key={index}
-                    style={[
-                      styles.outfitCard,
-                      isSelected && styles.outfitCardSelected,
-                    ]}
-                    onPress={() => setSelectedOutfit(item.label)}
-                    disabled={tryOnLoading}
+                    key={item.id}
+                    style={[styles.garmentCard, isSelected && styles.garmentCardSelected]}
+                    onPress={() => setSelectedGarment(item.id)}
+                    activeOpacity={0.9}
                   >
-                    <View style={styles.outfitImageStub}>
-                      <Text style={styles.outfitEmoji}>👗</Text>
+                    <Image source={{ uri: item.image }} style={styles.garmentImage} />
+                    <View style={styles.garmentInfo}>
+                      <Text style={styles.garmentBrand}>{item.brand}</Text>
+                      <Text style={styles.garmentName} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      <Text style={styles.garmentPrice}>{item.price}</Text>
                     </View>
-                    <Text style={styles.outfitLabel} numberOfLines={2}>
-                      {item.label}
-                    </Text>
-                    <Text style={styles.outfitMeta}>
-                      {item.confidence}% match
-                    </Text>
+                    {isSelected && (
+                      <View style={styles.selectedBadge}>
+                        <Ionicons name="checkmark" size={16} color="#000" />
+                      </View>
+                    )}
                   </TouchableOpacity>
                 );
               })}
-
-              {!outfits.length && (
-                <Text style={styles.outfitPlaceholder}>
-                  Once we analyze your look, we will surface K-style outfits
-                  tailored to your proportions.
-                </Text>
-              )}
-            </View>
-
-            <View style={styles.tryOnButtonWrapper}>
-              <Button
-                title={
-                  !capturedImageUri
-                    ? "Capture a photo first"
-                    : selectedOutfit
-                    ? tryOnLoading
-                      ? "Processing look…"
-                      : "Try on selected outfit"
-                    : "Select an outfit"
-                }
-                color="#ff006e"
-                onPress={() => {
-                  if (capturedImageUri && selectedOutfit && !tryOnLoading) {
-                    handleTryOn(selectedOutfit);
-                  }
-                }}
-                disabled={
-                  !capturedImageUri || !selectedOutfit || tryOnLoading
-                }
-              />
-            </View>
-
-            {!!tryOnError && (
-              <Text style={styles.tryOnErrorText}>
-                Try-on error: {tryOnError}
-              </Text>
-            )}
-
-            {tryOnImage && (
-              <View style={styles.tryOnPreview}>
-                <Text style={styles.tryOnTitle}>Your New Look</Text>
-                <Image
-                  source={{ uri: tryOnImage }}
-                  style={styles.tryOnImage}
-                />
-              </View>
-            )}
-
-            <View style={styles.debugPanel}>
-              <View style={styles.debugHeaderRow}>
-                <Text style={styles.debugTitle}>Debug Logs</Text>
-                <TouchableOpacity onPress={() => setDebugLogs([])}>
-                  <Text style={styles.debugClear}>Clear</Text>
-                </TouchableOpacity>
-              </View>
-              {!debugLogs.length ? (
-                <Text style={styles.debugEmpty}>No logs yet.</Text>
-              ) : (
-                debugLogs.slice(-12).map((line, idx) => (
-                  <Text key={`${idx}-${line}`} style={styles.debugLine}>
-                    {line}
-                  </Text>
-                ))
-              )}
-            </View>
+            </ScrollView>
           </View>
         </View>
       </ScrollView>
+
+      {hasScanned && selectedGarment && !tryOnResult && (
+        <View style={styles.floatingActionArea}>
+          <TouchableOpacity
+            style={styles.primaryAction}
+            onPress={handleGenerateTryOn}
+            disabled={isProcessing}
+          >
+            {isProcessing ? (
+              <ActivityIndicator color="#000" />
+            ) : (
+              <>
+                <Ionicons
+                  name="sparkles"
+                  size={20}
+                  color="#000"
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={styles.primaryActionText}>GENERATE SYNTHESIS</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: "#05050a",
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 40,
-  },
+  root: { flex: 1, backgroundColor: "#000000" },
   header: {
-    alignItems: "center",
-    marginBottom: 32,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: "800",
-    color: "#ffffff",
-    letterSpacing: -1,
-    marginBottom: 6,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: "#a0a0b8",
-  },
-  mainContent: {
-    gap: 20,
-  },
-  mainContentRow: {
-    flexDirection: "row",
-  },
-  mainContentColumn: {
-    flexDirection: "column",
-  },
-  card: {
-    flex: 1,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#ffffff",
-    marginBottom: 4,
-  },
-  cardSubtitle: {
-    fontSize: 13,
-    color: "#aaaacc",
-    marginBottom: 16,
-  },
-  captureRow: {
-    marginBottom: 16,
-  },
-  previewWrapper: {
-    marginTop: 16,
-    alignItems: "center",
-  },
-  previewImage: {
-    width: 220,
-    height: 320,
-    borderRadius: 16,
-    backgroundColor: "#111122",
-  },
-  previewLabel: {
-    marginTop: 8,
-    fontSize: 12,
-    color: "#8888aa",
-  },
-  genderSection: {
-    marginTop: 20,
-    padding: 16,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.03)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.06)",
-  },
-  genderTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#ffffff",
-    marginBottom: 12,
-  },
-  genderButtons: {
-    flexDirection: "row",
-    gap: 12,
-  },
-  genderButton: {
-    flex: 1,
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  genderButtonSelected: {
-    backgroundColor: "rgba(131,56,236,0.25)",
-    borderColor: "#ff006e",
-  },
-  genderEmoji: {
-    fontSize: 18,
-  },
-  genderText: {
-    fontSize: 13,
-    color: "#ffffff",
-    fontWeight: "600",
-  },
-  genderHint: {
-    marginTop: 8,
-    fontSize: 11,
-    color: "#7c7c98",
-  },
-  loadingBlock: {
-    marginTop: 20,
-    alignItems: "center",
-  },
-  loadingText: {
-    marginTop: 8,
-    fontSize: 13,
-    color: "#bbbbdd",
-  },
-  analysisCard: {
-    marginTop: 20,
-    padding: 16,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.03)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  analysisTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#ff80b5",
-    marginBottom: 10,
-  },
-  analysisChip: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    fontSize: 12,
-    color: "#ffffff",
-    marginBottom: 8,
-  },
-  analysisBody: {
-    fontSize: 13,
-    color: "#ddddf0",
-  },
-  avatarSection: {
-    marginTop: 24,
-  },
-  avatarTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#ffffff",
-    marginBottom: 10,
-  },
-  avatarCaption: {
-    marginTop: 8,
-    fontSize: 11,
-    color: "#8a8ab0",
-    textAlign: "center",
-  },
-  emptyState: {
-    marginTop: 24,
-    fontSize: 12,
-    color: "#8080a0",
-    textAlign: "center",
-  },
-  outfitGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-    marginTop: 16,
-  },
-  outfitCard: {
-    width: "47%",
-    backgroundColor: "rgba(255,255,255,0.03)",
-    borderRadius: 14,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.06)",
-  },
-  outfitCardSelected: {
-    borderColor: "#ff006e",
-    backgroundColor: "rgba(255,0,110,0.15)",
-  },
-  outfitImageStub: {
-    height: 80,
-    borderRadius: 10,
-    backgroundColor: "#151528",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 8,
-  },
-  outfitEmoji: {
-    fontSize: 28,
-  },
-  outfitLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#ffffff",
-  },
-  outfitMeta: {
-    marginTop: 4,
-    fontSize: 11,
-    color: "#a0a0c0",
-  },
-  outfitPlaceholder: {
-    fontSize: 12,
-    color: "#8080a0",
-  },
-  tryOnButtonWrapper: {
-    marginTop: 20,
-  },
-  tryOnPreview: {
-    marginTop: 24,
-    borderRadius: 18,
-    overflow: "hidden",
-    backgroundColor: "#101020",
-  },
-  tryOnTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#ffffff",
-    marginBottom: 10,
-  },
-  tryOnImage: {
-    width: "100%",
-    height: 320,
-  },
-  tryOnErrorText: {
-    marginTop: 10,
-    color: "#ff8aa0",
-    fontSize: 12,
-  },
-  debugPanel: {
-    marginTop: 20,
-    backgroundColor: "rgba(255,255,255,0.03)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    borderRadius: 12,
-    padding: 10,
-  },
-  debugHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    paddingHorizontal: 24,
+    paddingTop: Platform.OS === "web" ? 24 : 60,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1A1A1A",
   },
-  debugTitle: {
-    color: "#d5d5ff",
+  logo: { color: "#FFFFFF", fontSize: 18, fontWeight: "800", letterSpacing: 6 },
+  scroll: { flex: 1 },
+  scrollContent: { padding: 20, paddingBottom: 120 },
+  mainContainer: { gap: 24 },
+  mainContainerDesktop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    maxWidth: 1200,
+    alignSelf: "center",
+    width: "100%",
+  },
+  column: { flex: 1, gap: 24 },
+  sectionTitle: {
+    color: "#666666",
     fontSize: 12,
     fontWeight: "700",
+    letterSpacing: 2,
+    marginBottom: 12,
   },
-  debugClear: {
-    color: "#9c9cff",
-    fontSize: 12,
+  heroScanner: {
+    backgroundColor: "#121212",
+    borderRadius: 24,
+    padding: 40,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#222",
   },
-  debugEmpty: {
-    color: "#8080a0",
-    fontSize: 11,
+  scannerReticle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "rgba(169, 144, 255, 0.1)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: "rgba(169, 144, 255, 0.3)",
   },
-  debugLine: {
-    color: "#9ca3c7",
+  heroTitle: { color: "#FFFFFF", fontSize: 24, fontWeight: "600", marginBottom: 8 },
+  heroSub: { color: "#888888", fontSize: 14, textAlign: "center", marginBottom: 32 },
+  heroButton: {
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 100,
+  },
+  heroButtonText: { color: "#000000", fontWeight: "700", fontSize: 12, letterSpacing: 1 },
+  wizardCard: {
+    backgroundColor: "#121212",
+    borderRadius: 24,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#222",
+  },
+  profileCard: {
+    backgroundColor: "#121212",
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "#222",
+  },
+  profileHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  recalText: { color: "#A990FF", fontSize: 12, fontWeight: "600" },
+  avatarPlaceholder: {
+    height: 220,
+    backgroundColor: "#0A0A0A",
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#1A1A1A",
+    overflow: "hidden",
+  },
+  profilePreview: { width: "100%", height: "100%", resizeMode: "cover" },
+  avatarLabel: {
+    color: "#444",
     fontSize: 10,
+    letterSpacing: 1,
+    marginTop: 12,
+    textTransform: "uppercase",
+    position: "absolute",
+    bottom: 12,
+  },
+  mathRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    backgroundColor: "#0A0A0A",
+    padding: 16,
+    borderRadius: 16,
+  },
+  mathStat: { alignItems: "center" },
+  mathLabel: { color: "#666", fontSize: 10, letterSpacing: 1, marginBottom: 4 },
+  mathValue: { color: "#FFF", fontSize: 16, fontWeight: "600" },
+  carouselContainer: { paddingHorizontal: 10, gap: 16 },
+  garmentCard: {
+    width: 220,
+    backgroundColor: "#121212",
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#222",
+  },
+  garmentCardSelected: { borderColor: "#A990FF" },
+  garmentImage: { width: "100%", height: 260, backgroundColor: "#1A1A1A" },
+  garmentInfo: { padding: 16 },
+  garmentBrand: {
+    color: "#A990FF",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1,
     marginBottom: 4,
   },
+  garmentName: { color: "#FFFFFF", fontSize: 14, fontWeight: "500", marginBottom: 8 },
+  garmentPrice: { color: "#888888", fontSize: 13 },
+  selectedBadge: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    backgroundColor: "#A990FF",
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  resultCard: {
+    backgroundColor: "#121212",
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "#222",
+    alignItems: "center",
+  },
+  resultImage: { width: "100%", height: 450, borderRadius: 16, marginBottom: 20 },
+  secondaryButton: { paddingVertical: 12 },
+  secondaryButtonText: { color: "#888", fontSize: 14, fontWeight: "600" },
+  floatingActionArea: {
+    position: "absolute",
+    bottom: 40,
+    alignSelf: "center",
+    width: "100%",
+    maxWidth: 400,
+    paddingHorizontal: 24,
+  },
+  primaryAction: {
+    backgroundColor: "#A990FF",
+    flexDirection: "row",
+    height: 60,
+    borderRadius: 30,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#A990FF",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  primaryActionText: { color: "#000000", fontSize: 14, fontWeight: "800", letterSpacing: 1 },
+  errorText: { color: "#ff8aa0", fontSize: 12, marginTop: -8 },
 });
