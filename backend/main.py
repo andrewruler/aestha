@@ -229,6 +229,7 @@ async def get_catalog():
             "price": val["price"],
             "image": image_url,
             "label": key,
+            "category": val["category"],
         })
     return {"status": "success", "catalog": items}
 
@@ -236,32 +237,40 @@ async def get_catalog():
 @app.post("/try-on")
 async def generate_try_on(
     user_image: UploadFile = File(...),
-    clothing_item: str = Form(...),
+    garment_image_url: str = Form(""),
+    category: str = Form("tops"),
+    clothing_item: str = Form(""),  # Backward-compatible fallback
 ):
     """
-    Real try-on flow:
-    - Uploads the user image to Supabase.
-    - Looks up a garment image URL from the label.
-    - Calls FASHN's run + status endpoints and returns the final result image URL.
+    High-fidelity try-on flow:
+    - Uploads validated user image to Supabase.
+    - Uses dynamic garment URL/category from frontend.
+    - Calls FASHN with strict flat-lay parameters to reduce hallucinations.
     """
-    # 1. Read and upload the user image
+    # 1) Read and upload the user image
     user_bytes = await user_image.read()
     filename = user_image.filename or f"user-{int(time.time())}.jpg"
-    storage_path = f"user-uploads/{int(time.time())}-{filename}"
+    storage_path = f"vton-inputs/{int(time.time())}-{filename}"
 
     try:
         user_image_url = upload_to_supabase(storage_path, user_bytes)
     except Exception as e:
         return {"status": "error", "message": f"Failed to upload user image: {e}"}
 
-    # 2. Map clothing label to garment URL
-    garment = resolve_garment(clothing_item)
-    if not garment:
-        return {
-            "status": "error",
-            "message": f"No garment image mapped for clothing item '{clothing_item}'",
-        }
-    garment_url = validate_or_fallback_garment_url(garment["url"])
+    # 2) Resolve garment URL/category (prefer dynamic args, fallback to legacy clothing_item mapping)
+    resolved_category = category or "tops"
+    resolved_garment_url = garment_image_url
+
+    if not resolved_garment_url and clothing_item:
+        garment = resolve_garment(clothing_item)
+        if garment:
+            resolved_garment_url = garment.get("url", "")
+            resolved_category = garment.get("category", resolved_category)
+
+    if not resolved_garment_url:
+        return {"status": "error", "message": "Missing garment image URL (garment_image_url)."}
+
+    resolved_garment_url = validate_or_fallback_garment_url(resolved_garment_url)
 
     fashn_api_key = get_fashn_api_key()
     if not fashn_api_key:
@@ -273,72 +282,71 @@ async def generate_try_on(
         "Content-Type": "application/json",
     }
 
-    # FASHN v1.6 uses the universal /v1/run format:
-    # {
-    #   "model_name": "tryon-v1.6",
-    #   "inputs": { "model_image": "...", "garment_image": "...", ... }
-    # }
-    run_payload = {
+    # 3) Primary payload (as requested) + fallback payload (documented API format)
+    primary_payload = {
+        "model_image": user_image_url,
+        "garment_image": resolved_garment_url,
+        "category": resolved_category,
+        "garment_photo_type": "flat-lay",
+        "nsfw_filter": True,
+        "cover_feet": False,
+        "adjust_hands": True,
+    }
+    fallback_payload = {
         "model_name": "tryon-v1.6",
         "inputs": {
             "model_image": user_image_url,
-            "garment_image": garment_url,
-            "category": garment["category"],
+            "garment_image": resolved_garment_url,
+            "category": resolved_category,
+            "garment_photo_type": "flat-lay",
             "mode": "quality",
             "moderation_level": "permissive",
-            "garment_photo_type": "flat-lay",
             "output_format": "png",
-            "num_samples": 1,
         },
     }
 
-    # 3. Start the FASHN job
-    try:
-        run_resp = requests.post(
-            "https://api.fashn.ai/v1/run",
-            json=run_payload,
-            headers=headers,
-            timeout=30,
-        )
-        run_resp.raise_for_status()
-        run_data = run_resp.json()
-    except Exception as e:
-        error_body = ""
-        if "run_resp" in locals():
-            error_body = (run_resp.text or "")[:300]
+    run_resp = None
+    run_data = None
+    last_error = None
+    for payload in (primary_payload, fallback_payload):
+        try:
+            run_resp = requests.post(
+                "https://api.fashn.ai/v1/run",
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+            run_resp.raise_for_status()
+            run_data = run_resp.json()
+            break
+        except Exception as e:
+            last_error = e
+
+    if not run_data:
+        error_body = (run_resp.text or "")[:300] if run_resp is not None else ""
         return {
             "status": "error",
-            "message": f"FASHN run failed: {e}",
+            "message": f"FASHN run failed: {last_error}",
             "details": {
-                "fashn_http_status": getattr(run_resp, "status_code", None) if "run_resp" in locals() else None,
+                "fashn_http_status": getattr(run_resp, "status_code", None) if run_resp is not None else None,
                 "fashn_response_snippet": error_body,
-                "key_prefix": fashn_api_key[:6] + "***",
-                "key_length": len(fashn_api_key),
             },
         }
 
     job_id = run_data.get("id")
     if not job_id:
-        return {
-            "status": "error",
-            "message": "FASHN did not return a job id",
-            "details": run_data,
-        }
+        return {"status": "error", "message": "FASHN did not return a job id", "details": run_data}
 
-    # 4. Poll status until completion or timeout
+    # 4) Poll status until completion
     status_url = f"https://api.fashn.ai/v1/status/{job_id}"
-    max_attempts = 20  # ~60 seconds if we sleep 3s between polls
+    max_attempts = 20
     for _ in range(max_attempts):
         try:
             status_resp = requests.get(status_url, headers=headers, timeout=30)
             status_resp.raise_for_status()
             status_data = status_resp.json()
         except Exception as e:
-            return {
-                "status": "error",
-                "message": f"FASHN status check failed: {e}",
-                "job_id": job_id,
-            }
+            return {"status": "error", "message": f"FASHN status check failed: {e}", "job_id": job_id}
 
         status = status_data.get("status")
         if status == "completed":
@@ -349,27 +357,15 @@ async def generate_try_on(
                 or status_data.get("image_url")
                 or status_data.get("result_image_url")
                 or status_data.get("output_image")
-                or user_image_url
             )
-            return {
-                "status": "completed",
-                "job_id": job_id,
-                "result_image_url": result_url,
-            }
+            return {"status": "completed", "job_id": job_id, "result_image_url": result_url}
+
         if status in ("failed", "error"):
-            return {
-                "status": "error",
-                "job_id": job_id,
-                "details": status_data,
-            }
+            return {"status": "error", "job_id": job_id, "details": status_data}
 
         await asyncio.sleep(3)
 
-    return {
-        "status": "timeout",
-        "job_id": job_id,
-        "message": "FASHN job did not complete in time",
-    }
+    return {"status": "timeout", "job_id": job_id, "message": "FASHN job did not complete in time"}
 
 @app.get("/list-models")
 async def list_available_models():

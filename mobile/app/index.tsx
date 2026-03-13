@@ -128,27 +128,34 @@ export default function HomeScreen() {
   };
 
   const handleGenerateTryOn = async () => {
-    if (!capturedPayload?.front || !selectedGarment) return;
+    if (!capturedPayload?.front || !selectedGarment) {
+      Alert.alert("Missing Data", "Please complete your scan and select an item from the archive.");
+      return;
+    }
     setTryOnError(null);
+    setTryOnResult(null);
     setIsProcessing(true);
     try {
+      console.log(`[try-on] starting high-fidelity synthesis for ${selectedGarment.name}`);
       const formData = new FormData();
       if (Platform.OS === "web") {
         const response = await fetch(capturedPayload.front);
         const blob = await response.blob();
         const file =
           typeof File !== "undefined"
-            ? new File([blob], "tryon.jpg", { type: blob.type || "image/jpeg" })
+            ? new File([blob], "user_highres.jpg", { type: blob.type || "image/jpeg" })
             : blob;
         formData.append("user_image", file as any);
       } else {
         formData.append("user_image", {
           uri: primaryImageUri,
-          name: "tryon.jpg",
+          name: "user_highres.jpg",
           type: "image/jpeg",
         } as any);
       }
-      formData.append("clothing_item", selectedGarment.label);
+      formData.append("garment_image_url", selectedGarment.image);
+      formData.append("category", selectedGarment.category || "tops");
+      formData.append("clothing_item", selectedGarment.label); // compatibility fallback
 
       const response = await fetch(`${BACKEND_URL}/try-on`, {
         method: "POST",
@@ -167,10 +174,11 @@ export default function HomeScreen() {
       }
 
       setTryOnResult(json.result_image_url);
+      console.log("[try-on] synthesis complete");
     } catch (e) {
       const msg = String(e);
       setTryOnError(msg);
-      Alert.alert("Try-On Failed", msg);
+      Alert.alert("Synthesis Failed", msg);
     } finally {
       setIsProcessing(false);
     }
@@ -573,12 +581,19 @@ const styles = StyleSheet.create({
   resultCard: {
     backgroundColor: "#121212",
     borderRadius: 24,
-    padding: 24,
+    padding: 16,
+    marginTop: 24,
     borderWidth: 1,
-    borderColor: "#222",
+    borderColor: "#A990FF",
     alignItems: "center",
   },
-  resultImage: { width: "100%", height: 450, borderRadius: 16, marginBottom: 20 },
+  resultImage: {
+    width: "100%",
+    aspectRatio: 3 / 4,
+    borderRadius: 16,
+    backgroundColor: "#050505",
+    marginBottom: 16,
+  },
   secondaryButton: { paddingVertical: 12 },
   secondaryButtonText: { color: "#888", fontSize: 14, fontWeight: "600" },
   floatingActionArea: {
