@@ -87,7 +87,7 @@ function WebSpatialCamera({ onCapture }: SpatialCameraProps) {
 // since it does not support web.
 let VisionCamera: any = null;
 if (Platform.OS !== 'web') {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   VisionCamera = require('react-native-vision-camera');
 }
 
@@ -104,7 +104,7 @@ function NativeSpatialCamera({ onCapture }: SpatialCameraProps) {
       const status = await Camera.requestCameraPermission();
       setHasPermission(status === 'granted');
     })();
-  }, []);
+  }, [Camera]);
 
   if (!hasPermission || !device) return <Text>No Camera Access</Text>;
 

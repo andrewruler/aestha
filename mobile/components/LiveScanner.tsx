@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { StepId, initializeValidationEngine, validateLiveVideoFrame } from "../utils/visionValidation";
 
-type ScannerStep = Exclude<StepId, "measurements">;
+type ScannerStep = Exclude<StepId, "measurements" | "survey">;
 
 type Props = {
   stepId: ScannerStep;
@@ -56,7 +56,7 @@ export default function LiveScanner({ stepId, onCaptureSuccess }: Props) {
   }, [cancelLoop, onCaptureSuccess, stopStream]);
 
   const drawOverlay = useCallback(
-    (keypoints: Array<{ x: number; y: number; score: number }> | undefined, color: string) => {
+    (keypoints: { x: number; y: number; score: number }[] | undefined, color: string) => {
       const canvas = overlayCanvasRef.current;
       const video = videoRef.current;
       if (!canvas || !video) return;
@@ -77,29 +77,20 @@ export default function LiveScanner({ stepId, onCaptureSuccess }: Props) {
       ctx.lineWidth = 3;
       ctx.fillStyle = color;
 
+      // MoveNet skeleton indices (17 keypoints).
       const pairs = [
-        [5, 6],
-        [5, 11],
-        [6, 12],
-        [11, 12],
-        [11, 13],
-        [13, 15],
-        [12, 14],
-        [14, 16],
-        [11, 15],
-        [12, 16],
-        [11, 15],
-        [12, 16],
-        [11, 15],
-        [11, 15],
-        [11, 12],
-        [11, 23],
-        [12, 24],
-        [23, 24],
-        [23, 25],
-        [25, 27],
-        [24, 26],
-        [26, 28],
+        [5, 6],   // shoulders
+        [5, 7],   // left upper arm
+        [7, 9],   // left lower arm
+        [6, 8],   // right upper arm
+        [8, 10],  // right lower arm
+        [5, 11],  // left torso
+        [6, 12],  // right torso
+        [11, 12], // hips
+        [11, 13], // left upper leg
+        [13, 15], // left lower leg
+        [12, 14], // right upper leg
+        [14, 16], // right lower leg
       ];
 
       const minScore = 0.25;
@@ -203,7 +194,7 @@ export default function LiveScanner({ stepId, onCaptureSuccess }: Props) {
       cancelLoop();
       stopStream();
     };
-  }, [cancelLoop, captureFrame, stepId, stopStream]);
+  }, [cancelLoop, captureFrame, drawOverlay, stepId, stopStream]);
 
   return (
     <View style={styles.container}>
