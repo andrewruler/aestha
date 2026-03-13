@@ -14,6 +14,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import CaptureWizard, { CapturePayload } from "../components/CaptureWizard";
 import { BACKEND_URL } from "../src/config";
+import Avatar3D from "../components/Avatar3D";
 
 const CATALOG = [
   {
@@ -63,6 +64,8 @@ export default function HomeScreen() {
   const [capturedPayload, setCapturedPayload] = useState<CapturePayload | null>(null);
   const [selectedGarment, setSelectedGarment] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [tryOnResult, setTryOnResult] = useState<string | null>(null);
   const [tryOnError, setTryOnError] = useState<string | null>(null);
 
@@ -71,14 +74,67 @@ export default function HomeScreen() {
 
   const handleStartScan = () => {
     setWizardActive(true);
+    setHasScanned(false);
+    setCapturedPayload(null);
+    setAnalysisResult(null);
     setTryOnResult(null);
     setTryOnError(null);
   };
 
-  const handleScanComplete = (payload: CapturePayload) => {
+  const handleScanComplete = async (payload: CapturePayload) => {
     setCapturedPayload(payload);
     setWizardActive(false);
     setHasScanned(true);
+    setTryOnResult(null);
+    setTryOnError(null);
+
+    const primaryUri = payload.front ?? payload.side ?? payload.face ?? null;
+    if (!primaryUri) return;
+
+    setIsAnalyzing(true);
+    try {
+      const formData = new FormData();
+      const appendImage = async (uri: string, filename: string, key: string) => {
+        if (Platform.OS === "web") {
+          const response = await fetch(uri);
+          const blob = await response.blob();
+          const file =
+            typeof File !== "undefined"
+              ? new File([blob], filename, { type: blob.type || "image/jpeg" })
+              : blob;
+          formData.append(key, file as any);
+        } else {
+          formData.append(key, {
+            uri,
+            name: filename,
+            type: "image/jpeg",
+          } as any);
+        }
+      };
+
+      await appendImage(primaryUri, "profile.jpg", "image");
+      if (payload.front) await appendImage(payload.front, "front.jpg", "front_image");
+      if (payload.side) await appendImage(payload.side, "side.jpg", "side_image");
+      if (payload.face) await appendImage(payload.face, "face.jpg", "face_image");
+
+      if (payload.measurements.height) formData.append("height_cm", payload.measurements.height);
+      if (payload.calculatedMath?.shoulderCm) formData.append("shoulder_cm", String(payload.calculatedMath.shoulderCm));
+      if (payload.calculatedMath?.hipCm) formData.append("hip_cm", String(payload.calculatedMath.hipCm));
+      formData.append("gender", "unknown");
+
+      const response = await fetch(`${BACKEND_URL}/analyze`, {
+        method: "POST",
+        body: formData,
+        headers: { Accept: "application/json" },
+      });
+      const raw = await response.text();
+      const json = raw ? JSON.parse(raw) : {};
+      setAnalysisResult(json);
+    } catch (e) {
+      Alert.alert("Analysis Failed", String(e));
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const handleGenerateTryOn = async () => {
@@ -174,6 +230,7 @@ export default function HomeScreen() {
                       setHasScanned(false);
                       setWizardActive(false);
                       setCapturedPayload(null);
+                      setAnalysisResult(null);
                       setTryOnResult(null);
                       setTryOnError(null);
                     }}
@@ -199,9 +256,9 @@ export default function HomeScreen() {
                     </Text>
                   </View>
                   <View style={styles.mathStat}>
-                    <Text style={styles.mathLabel}>CHEST</Text>
+                    <Text style={styles.mathLabel}>SHOULDER</Text>
                     <Text style={styles.mathValue}>
-                      {capturedPayload?.measurements.chest || "--"} cm
+                      {capturedPayload?.calculatedMath?.shoulderCm || "--"} cm
                     </Text>
                   </View>
                   <View style={styles.mathStat}>
@@ -211,12 +268,47 @@ export default function HomeScreen() {
                     </Text>
                   </View>
                   <View style={styles.mathStat}>
-                    <Text style={styles.mathLabel}>HIPS</Text>
+                    <Text style={styles.mathLabel}>HIP</Text>
                     <Text style={styles.mathValue}>
-                      {capturedPayload?.measurements.hips || "--"} cm
+                      {capturedPayload?.calculatedMath?.hipCm || "--"} cm
                     </Text>
                   </View>
                 </View>
+                {!capturedPayload?.calculatedMath && (
+                  <View style={styles.mathWarningBadge}>
+                    <Ionicons name="warning-outline" size={14} color="#ffc57a" />
+                    <Text style={styles.mathWarningText}>
+                      Could not extract shoulder/hip math from this scan. Recalibrate in brighter light for more accurate tailoring.
+                    </Text>
+                  </View>
+                )}
+
+                <View style={{ marginTop: 16 }}>
+                  <Avatar3D
+                    shoulderCm={capturedPayload?.calculatedMath?.shoulderCm}
+                    hipCm={capturedPayload?.calculatedMath?.hipCm}
+                  />
+                </View>
+
+                {isAnalyzing && (
+                  <View style={{ marginTop: 12, alignItems: "center" }}>
+                    <ActivityIndicator color="#A990FF" />
+                    <Text style={{ color: "#8a8a99", marginTop: 6, fontSize: 12 }}>
+                      Running stylist intelligence...
+                    </Text>
+                  </View>
+                )}
+
+                {analysisResult?.analysis?.spatial_analysis && (
+                  <View style={styles.analysisCard}>
+                    <Text style={styles.analysisTitle}>
+                      {analysisResult.analysis.spatial_analysis.body_shape}
+                    </Text>
+                    <Text style={styles.analysisText}>
+                      {analysisResult.analysis.spatial_analysis.fit_advice}
+                    </Text>
+                  </View>
+                )}
               </View>
             )}
 
@@ -489,4 +581,41 @@ const styles = StyleSheet.create({
   },
   primaryActionText: { color: "#000000", fontSize: 14, fontWeight: "800", letterSpacing: 1 },
   errorText: { color: "#ff8aa0", fontSize: 12, marginTop: -8 },
+  mathWarningBadge: {
+    marginTop: 10,
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "rgba(255,197,122,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,197,122,0.25)",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  mathWarningText: {
+    flex: 1,
+    color: "#f7cf97",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  analysisCard: {
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#2a2a38",
+    backgroundColor: "#0d0d15",
+  },
+  analysisTitle: {
+    color: "#A990FF",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 6,
+    letterSpacing: 1,
+  },
+  analysisText: {
+    color: "#d6d6e8",
+    fontSize: 12,
+    lineHeight: 18,
+  },
 });

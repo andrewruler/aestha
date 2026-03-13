@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { StepId, initializeValidationEngine, validateLiveVideoFrame } from "../utils/visionValidation";
 
@@ -24,21 +24,21 @@ export default function LiveScanner({ stepId, onCaptureSuccess }: Props) {
   const [progress, setProgress] = useState(0);
   const [initializing, setInitializing] = useState(true);
 
-  const stopStream = () => {
+  const stopStream = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
-  };
+  }, []);
 
-  const cancelLoop = () => {
+  const cancelLoop = useCallback(() => {
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-  };
+  }, []);
 
-  const captureFrame = (video: HTMLVideoElement) => {
+  const captureFrame = useCallback((video: HTMLVideoElement) => {
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -51,7 +51,7 @@ export default function LiveScanner({ stepId, onCaptureSuccess }: Props) {
     cancelLoop();
     stopStream();
     onCaptureSuccess(image);
-  };
+  }, [cancelLoop, onCaptureSuccess, stopStream]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -129,12 +129,11 @@ export default function LiveScanner({ stepId, onCaptureSuccess }: Props) {
       cancelLoop();
       stopStream();
     };
-  }, [stepId, onCaptureSuccess]);
+  }, [cancelLoop, captureFrame, stepId, stopStream]);
 
   return (
     <View style={styles.container}>
       {/* Web-only raw video element for low-latency live scanning */}
-      {/* eslint-disable-next-line react/no-unknown-property */}
       <video ref={videoRef} style={styles.video as any} muted playsInline />
 
       <View style={styles.overlay}>

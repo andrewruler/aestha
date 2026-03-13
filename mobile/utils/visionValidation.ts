@@ -140,6 +140,9 @@ export const initializeValidationEngine = async () => {
   await ensureDetector();
 };
 
+// Backward-compatible alias for modules expecting a MediaPipe-style initializer.
+export const initializeMediaPipe = async () => ensureDetector();
+
 export const validatePose = async (imageUri: string, stepId: StepId): Promise<ValidationResult> => {
   if (Platform.OS !== "web" || stepId === "measurements") return { valid: true };
 

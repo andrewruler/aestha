@@ -342,7 +342,10 @@ async def list_available_models():
 @app.post("/analyze")
 async def analyze(
     image: UploadFile = File(...),
-    body_ratio: str = Form("unknown"),
+    height_cm: str = Form("unknown"),
+    shoulder_cm: str = Form("unknown"),
+    hip_cm: str = Form("unknown"),
+    gender: str = Form("unknown"),
 ):
     content = await image.read()
 
@@ -354,30 +357,33 @@ async def analyze(
         }
     ]
 
-    # 2. The Prompt (image + spatial ratio)
+    # 2. Upgraded prompt with exact anthropometric measurements
     prompt = f"""
-    Analyze this person's outfit and body proportions for a fashion app.
-    Use both the uploaded image and the numeric shoulder-to-hip ratio to infer body shape and styling advice.
+    You are an elite fashion stylist specializing in K-style and minimalist aesthetics.
+    Analyze the uploaded photo and the exact anthropometric measurements provided.
 
-    CRITICAL SPATIAL DATA: The user's shoulder-to-hip ratio calculated on-device is {body_ratio}.
-    - A ratio > 1.2 indicates an inverted triangle shape.
-    - A ratio < 0.9 indicates a pear shape.
-    - A ratio between 0.9 and 1.1 indicates a rectangular or hourglass shape.
-    (Note: if the ratio is 'unknown', just provide general styling advice based on the image alone).
+    CRITICAL CLIENT DATA:
+    - Gender Profile: {gender}
+    - Height: {height_cm} cm
+    - Shoulder Width: {shoulder_cm} cm
+    - Hip Width: {hip_cm} cm
+
+    Use these measurements to infer their geometric silhouette (e.g., Pear, Inverted Triangle,
+    Hourglass, Rectangle) and provide concrete fit guidance.
+    Recommend specific cuts that balance these exact proportions.
 
     Return ONLY a valid JSON object with this exact structure:
     {{
       "detected_outfit": {{
         "status": "success",
         "items": [
-          {{"label": "t-shirt", "color": "white", "type": "top"}},
-          {{"label": "jeans", "color": "blue", "type": "bottom"}}
+          {{"label": "t-shirt", "color": "white", "type": "top"}}
         ],
-        "style_tags": ["casual", "minimalist"]
+        "style_tags": ["casual", "k-style"]
       }},
       "spatial_analysis": {{
-        "body_shape": "string (e.g., Inverted Triangle, Pear, Rectangle, Hourglass, or Unknown)",
-        "fit_advice": "1-2 sentences of specific styling advice that explicitly references the {body_ratio} ratio."
+        "body_shape": "String classification (e.g., Pear, Inverted Triangle, True Hourglass)",
+        "fit_advice": "2-3 sentences of highly specific tailoring advice referencing their {shoulder_cm}cm shoulders and {hip_cm}cm hips."
       }}
     }}
     """

@@ -13,6 +13,7 @@ import {
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { initializeValidationEngine, validateCapturedShot } from "../utils/visionValidation";
 import LiveScanner from "./LiveScanner";
+import { BodyMeasurements, calculateBodyMath } from "../utils/bodyMath";
 
 const STEPS = [
   { id: "front", label: "Front Scan", desc: "Stand straight facing the camera, head to toe." },
@@ -29,6 +30,7 @@ export type CapturePayload = {
   side: string | null;
   face: string | null;
   measurements: UserMeasurements;
+  calculatedMath: BodyMeasurements | null;
 };
 
 interface Props { onComplete: (payload: CapturePayload) => void; }
@@ -50,6 +52,7 @@ export default function CaptureWizard({ onComplete }: Props) {
   const [validating, setValidating] = useState(false);
   const [validationError, setValidationError] = useState("");
   const [captureError, setCaptureError] = useState("");
+  const [isCalculating, setIsCalculating] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
 
@@ -127,12 +130,38 @@ export default function CaptureWizard({ onComplete }: Props) {
     setStepIndex((prev) => prev + 1);
   };
 
-  const handleFinish = () => {
+  const handleFinish = async () => {
     if (!photos.front || !photos.side || !photos.face) {
       Alert.alert("Missing scans", "Please complete all 3 scans before submitting.");
       return;
     }
-    onComplete({ ...photos, measurements });
+
+    if (!measurements.height) {
+      Alert.alert(
+        "Height Required",
+        "Please enter your height so we can calculate your true proportions."
+      );
+      return;
+    }
+
+    const parsedHeight = Number(measurements.height);
+    if (!isFinite(parsedHeight) || parsedHeight <= 0) {
+      Alert.alert("Invalid Height", "Please enter a valid numeric height in centimeters.");
+      return;
+    }
+
+    let computedBodyMath: BodyMeasurements | null = null;
+    setIsCalculating(true);
+    try {
+      if (photos.front) {
+        computedBodyMath = await calculateBodyMath(photos.front, parsedHeight);
+      }
+      onComplete({ ...photos, measurements, calculatedMath: computedBodyMath });
+    } catch {
+      Alert.alert("Math Error", "Failed to calculate proportions. Please try again.");
+    } finally {
+      setIsCalculating(false);
+    }
   };
 
   if (engineLoading) {
@@ -198,7 +227,14 @@ export default function CaptureWizard({ onComplete }: Props) {
             value={measurements.hips}
             onChangeText={(t) => setMeasurements({ ...measurements, hips: t })}
           />
-          <Button title="Submit Profile" onPress={handleFinish} color="#ff006e" />
+          {isCalculating ? (
+            <View style={styles.calculatingWrap}>
+              <ActivityIndicator color="#A990FF" />
+              <Text style={styles.calculatingText}>Extracting measurements...</Text>
+            </View>
+          ) : (
+            <Button title="Submit Profile" onPress={handleFinish} color="#A990FF" />
+          )}
         </View>
       ) : (
         <View style={styles.scanBlock}>
@@ -317,5 +353,14 @@ const styles = StyleSheet.create({
     color: "#aaaacc",
     fontSize: 11,
     textTransform: "capitalize",
+  },
+  calculatingWrap: {
+    alignItems: "center",
+    marginTop: 20,
+  },
+  calculatingText: {
+    color: "#fff",
+    marginTop: 10,
+    fontSize: 12,
   },
 });
